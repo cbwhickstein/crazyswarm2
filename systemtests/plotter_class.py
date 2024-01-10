@@ -4,7 +4,7 @@ import sys
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 from crazyflie_py.uav_trajectory import Trajectory
-from pathlib import Path
+
 
 
 class Plotter:
@@ -15,18 +15,19 @@ class Plotter:
         self.bag_x = np.empty([0])
         self.bag_y = np.empty([0])
         self.bag_z = np.empty([0])
+        self.bag_sim_times = np.empty([0])
         self.ideal_traj_x = np.empty([0])
         self.ideal_traj_y = np.empty([0])
         self.ideal_traj_z = np.empty([0])
         self.euclidian_dist = np.empty([0])
         self.deviation = [] #list of all indexes where euclidian_distance(ideal - recorded) > EPSILON
+        self.sim = False  #indicates if we are plotting data from simulation or from a physical test
 
         self.EPSILON = 0.05 # euclidian distance in [m] between ideal and recorded trajectory under which the drone has to stay to pass the test
         self.DELAY_CONST_FIG8 = 4.75 #this is the delay constant which I found by adding up all the time.sleep() etc in the figure8.py file. This could be implemented better later ?
         self.ALTITUDE_CONST_FIG8 = 1 #this is the altitude given for the takeoff in figure8.py. I should find a better solution than a symbolic constant ?
         self.ALTITUDE_CONST_MULTITRAJ = 1 #takeoff altitude for traj0 in multi_trajectory.py
         self.X_OFFSET_CONST_MULTITRAJ = -0.3 #offest on the x axis between ideal and real trajectory. Reason: ideal trajectory (traj0.csv) starts with offset of 0.3m and CrazyflieServer.startTrajectory() is relative to start position
-
     def file_guard(self, pdf_path):
         msg = None
         if os.path.exists(pdf_path):
@@ -69,15 +70,48 @@ class Plotter:
             exit(1)
 
 
-        #get rosbag data
-        rosbag_data = np.loadtxt(rosbag_csvfile, delimiter=",")
+        #get rosbag data    
+        # rosbag_data = np.loadtxt(rosbag_csvfile, delimiter=",")
+        # self.topics = np.array(rosbag_data[:,0])  #array containing only the topic names, line by line
         
-        self.bag_times = np.array(rosbag_data[:,0])
-        self.bag_x = np.array(rosbag_data[:,1])
-        self.bag_y = np.array(rosbag_data[:,2])
-        self.bag_z = np.array(rosbag_data[:,3])
+        
+        
+        #count the number of columns 
+        with open(rosbag_csvfile) as f:
+            ncols = len(f.readline().split(','))
+        #extract data from the rosbag csv file
+        #one array with only the first column (topic names), another with all the other columns containing the message data
+        topic_column = np.loadtxt(rosbag_csvfile, delimiter=',', usecols=0, skiprows=1, dtype=str) ###################gommer max rows et skiprows
+        msg_data = np.loadtxt(rosbag_csvfile,delimiter=',', usecols=range(1,ncols), skiprows=1)
+
+
+        #create a dict from the csvfile containing the names of the topics as keys and list of the all the lines corresponding to the topic as values e.g {"/tf" : [0,2,4]. "/clock" : [1,3,5]
+        topic_indexes = dict()              
+        for index, topic in enumerate(topic_column):
+            if topic not in topic_indexes:
+                topic_indexes.update({topic : [index]})   #if topic isn't already a key in the dict, we create the key and the list containing the index of the line
+            else:
+                topic_indexes[topic].append(index)        #if topic is already a key, simply add the the index of this line to the topic list
+
+        
+       # tf_data = np.loadtxt(rosbag_csvfile, delimiter=",", usecols=topic_indexes["/tf"])
+        #does this work ? need to test ############################################### can I also make the rosbag data simpler ? also check line 210
+        #extract rows corresponding to the tf topic
+        self.bag_times = np.array(msg_data[topic_indexes["/tf"],0])     #/tf row, column 0 -> timestamp in nanoseconds (will be transformed to seconds in adjust_arrays)
+        self.bag_x = np.array(msg_data[topic_indexes["/tf"],1])         #/tf rows, column 1 -> x position      
+        self.bag_y = np.array(msg_data[topic_indexes["/tf"],2])
+        self.bag_z = np.array(msg_data[topic_indexes["/tf"],3])
+        print(len(self.bag_times))
+        #clock_data = np.loadtxt(rosbag_csvfile, delimiter=",", usecols=topic_indexes["/clock"])
+        #if using sim backend, simulation time is recorded in /clock and we use it instead of the timestamp
+        #we get the sim_time in nanoseconds by adding the 5th column (seconds)*10^9 and 6th column(nanoseconds) of msg_data. It will be transformed in seconds in adjust_arrays
+        if self.sim:
+            self.bag_times = np.array(msg_data[topic_indexes["/clock"],4]*(10**9) + msg_data[topic_indexes["/clock"],5])
+        #self.bag_sim_times = np.array(clock_data[:,1] + clock_data[:,2]*10**(-9))  #does this line work ?
+            
+        print(len(self.bag_times), len(self.bag_x), len(self.bag_y), len(self.bag_z))
     
-        self.adjust_arrays()
+        self.adjust_arrays()        ##############also need to adjust the sim_times array ?
         bag_arrays_size = len(self.bag_times)
         print("number of datapoints in self.bag_*: ",bag_arrays_size)
 
@@ -146,6 +180,7 @@ class Plotter:
     def adjust_arrays(self):
         ''' Method that trims the self.bag_* attributes to get rid of the datapoints where the drone is immobile on the ground and makes self.bag_times start at 0 [s]'''
 
+        length = (self.bag_times[-1]-self.bag_times[0])
         print(f"rosbag initial length {(self.bag_times[-1]-self.bag_times[0]) * 10**-9}s")
 
         #find the takeoff time and landing times
@@ -160,7 +195,7 @@ class Plotter:
                 takeoff_time = self.bag_times[takeoff_index]
                 airborne = True
                 print(f"takeof time is {(takeoff_time-self.bag_times[0]) * 10**-9}")
-            if airborne and z_coord < ground_level + ground_level*(0.1): #find when it lands again
+            if airborne and z_coord <= ground_level + ground_level*(0.1): #find when it lands again
                 landing_index = i
                 landing_time = self.bag_times[landing_index]
                 print(f"landing time is {(landing_time-self.bag_times[0]) * 10**-9}")
@@ -171,7 +206,7 @@ class Plotter:
 
 
         ####get rid of datapoints before takeoff and after landing in bag_times, bag_x, bag_y, bag_y   
-
+        print(len(self.bag_times), len(self.bag_x), len(self.bag_y), len(self.bag_z))
         assert len(self.bag_times) == len(self.bag_x) == len(self.bag_y) == len(self.bag_z), "Plotter : self.bag_* aren't the same size before trimming"
         index_arr = np.arange(len(self.bag_times))
         slicing_arr = np.delete(index_arr, index_arr[takeoff_index:landing_index+1])  #in our slicing array we take out all the indexes of when the drone is in flight so that it only contains the indexes of when the drone is on the ground
@@ -182,6 +217,8 @@ class Plotter:
         self.bag_y = np.delete(self.bag_y, slicing_arr)
         self.bag_z = np.delete(self.bag_z, slicing_arr)
 
+    
+
         assert len(self.bag_times) == len(self.bag_x) == len(self.bag_y) == len(self.bag_z), "Plotter : self.bag_* aren't the same size after trimming"
 
         #rewrite bag_times to start at 0 and be written in [s] instead of [ns]
@@ -190,7 +227,12 @@ class Plotter:
         assert self.bag_times[0] == 0
         print(f"trimmed bag_times starts: {self.bag_times[0]}s and ends: {self.bag_times[-1]}, size: {len(self.bag_times)}")
 
-
+###############################################################################33
+#         os.remove("/home/julien/zcoord") ##################3333
+#         for i in range(len(self.bag_times)):    
+#             with open("/home/julien/zcoord", "a") as f:
+#                 f.write(f"t: {self.bag_times[i]}    z: {self.bag_z[i]} \n")
+##########################################################################################
 
     def create_figures(self, ideal_csvfile:str, rosbag_csvfile:str, pdfname:str):
         '''Method that creates the pdf with the plots'''
@@ -338,18 +380,23 @@ if __name__=="__main__":
     
     #command line utility 
 
-    from argparse import ArgumentParser, Namespace
-    parser = ArgumentParser(description="Creates a pdf plotting the recorded trajectory of a drone against its desired trajectory")
-    parser.add_argument("desired_trajectory", type=str, help=".csv file containing (time,x,y,z) of the ideal/desired drone trajectory")
-    parser.add_argument("recorded_trajectory", type=str, help=".csv file containing (time,x,y,z) of the recorded drone trajectory")
-    parser.add_argument("pdf", type=str, help="name of the pdf file you want to create/overwrite")
-    parser.add_argument("--open", help="Open the pdf directly after it is created", action="store_true")
-    args : Namespace = parser.parse_args()
+    # from argparse import ArgumentParser, Namespace
+    # parser = ArgumentParser(description="Creates a pdf plotting the recorded trajectory of a drone against its desired trajectory")
+    # parser.add_argument("desired_trajectory", type=str, help=".csv file containing (time,x,y,z) of the ideal/desired drone trajectory")
+    # parser.add_argument("recorded_trajectory", type=str, help=".csv file containing (time,x,y,z) of the recorded drone trajectory")
+    # parser.add_argument("pdf", type=str, help="name of the pdf file you want to create/overwrite")
+    # parser.add_argument("--open", help="Open the pdf directly after it is created", action="store_true")
+    # args : Namespace = parser.parse_args()
+
+    # plotter = Plotter()
+    # plotter.create_figures(args.desired_trajectory, args.recorded_trajectory, args.pdf)
+    # if args.open:
+    #     import subprocess
+    #     subprocess.call(["xdg-open", args.pdf])
+        
 
     plotter = Plotter()
-    plotter.create_figures(args.desired_trajectory, args.recorded_trajectory, args.pdf)
-    if args.open:
-        import subprocess
-        subprocess.call(["xdg-open", args.pdf])
-        
+    plotter.sim = True
+    plotter.create_figures("/home/julien/ros2_ws/src/crazyswarm2/crazyflie_examples/crazyflie_examples/data/figure8.csv",
+                           "/home/julien/ros2_ws/src/crazyswarm2/systemtests/figure8_tfclockbag_0.csv", "/home/julien/ros2_ws/src/crazyswarm2/systemtests/tfclock.pdf")
         
