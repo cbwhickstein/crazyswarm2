@@ -48,7 +48,7 @@ def clean_process(process:Popen) -> int :
 
 
 class TestFlights(unittest.TestCase):
-    SIM = False
+    SIM = True
 
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
@@ -98,7 +98,7 @@ class TestFlights(unittest.TestCase):
         try:
             command = f"{src} && ros2 bag record -s mcap -o test_{testname} /tf"
             if TestFlights.SIM:
-                command += " /clock"
+                command += " /clock"                                                           #if using sim backend, we also need to record simulation time in /clock topic
             record_bag =  Popen(command, shell=True, stderr=PIPE, stdout=True, text=True,
                                 cwd= self.ros2_ws / "results/", start_new_session=True, executable="/bin/bash") 
             atexit.register(clean_process, record_bag)
@@ -110,9 +110,14 @@ class TestFlights(unittest.TestCase):
                                     start_new_session=True, text=True, executable="/bin/bash")
             atexit.register(clean_process, start_flight_test)
 
-            start_flight_test.wait(timeout=max_wait)  #raise Timeoutexpired after max_wait seconds if start_flight_test didn't finish by itself
+            if TestFlights.SIM :
+                start_flight_test.wait()  #no timeout if simulation 
+            else : 
+                start_flight_test.wait(timeout=max_wait)  #raise Timeoutexpired after max_wait seconds if start_flight_test didn't finish by itself
+
             clean_process(start_flight_test)          
             clean_process(record_bag)
+            print("finished the test")
 
         except TimeoutExpired:      #if max_wait is exceeded
             clean_process(start_flight_test)          
@@ -128,7 +133,7 @@ class TestFlights(unittest.TestCase):
         if start_flight_test.stderr != None:
             print(testname," start_flight flight stderr: ", start_flight_test.stderr.readlines())
 
-
+        
     def translate_plot_and_check(self, testname:str) -> bool :
         '''Translates rosbag .mcap format to .csv, then uses that csv to plot a pdf. Checks the deviation between ideal and real trajectories, i.e if the drone 
             successfully followed its given trajectory. Returns True if deviation < epsilon(defined in plotter_class.py) at every timestep, false if not.  '''
@@ -166,15 +171,4 @@ class TestFlights(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    parser = ArgumentParser(description="Run a unit test of the different flight examples")
-    parser.add_argument("--sim", action="store_true", help="Run the tests in the simulation backend")
-    args : Namespace = parser.parse_args()
-    if args.sim :
-        TestFlights.SIM = True      #if "--sim" is given, run on the simulation backend
-    #unittest.main()
-    setUpModule()
-    tester = TestFlights()
-    tester.setUp()
-    tester.test_figure8()
-    tester.tearDown()
-    tearDownModule()
+    unittest.main()
