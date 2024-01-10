@@ -48,7 +48,7 @@ def clean_process(process:Popen) -> int :
 
 
 class TestFlights(unittest.TestCase):
-    SIM = True
+    SIM = False
 
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
@@ -171,4 +171,12 @@ class TestFlights(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    from argparse import ArgumentParser, Namespace
+    import sys
+    parser = ArgumentParser(description="Runs (real or simulated) flight tests with pytest framework")
+    parser.add_argument("--sim", action="store_true", help="Runs the test from the simulation backend")
+    args, other_args = parser.parse_known_args()
+    if args.sim :
+        TestFlights.SIM = True
+
+    unittest.main(argv=[sys.argv[0]] + other_args)
