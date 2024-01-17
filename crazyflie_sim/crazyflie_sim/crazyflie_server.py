@@ -24,6 +24,8 @@ from std_srvs.srv import Empty
 # from .backend.none import BackendNone
 from .crazyflie_sil import CrazyflieSIL, TrajectoryPolynomialPiece
 from .sim_data_types import State
+from .crazyflie_hil import CrazyflieHIL
+
 
 
 class CrazyflieServer(Node):
@@ -84,11 +86,19 @@ class CrazyflieServer(Node):
 
         # create robot SIL objects
         for name, initial_state in zip(names, initial_states):
-            self.cfs[name] = CrazyflieSIL(
-                name,
-                initial_state.pos,
-                controller_name,
-                self.backend.time)
+            # Check if SIL or HIL is used
+            if "hil" in self._ros_parameters.keys():
+                self.cfs[name] = CrazyflieHIL(
+                    name,
+                    initial_state.pos,
+                    controller_name,
+                    self.backend.time)
+            else:
+                self.cfs[name] = CrazyflieSIL(
+                    name,
+                    initial_state.pos,
+                    controller_name,
+                    self.backend.time)
 
         # Create services for the entire swarm and each individual crazyflie
         self.create_service(Empty, 'all/emergency', self._emergency_callback)

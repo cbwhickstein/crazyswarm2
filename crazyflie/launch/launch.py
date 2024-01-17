@@ -115,6 +115,15 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=server_params
         ),
+        Node( #new hil config
+            package='crazyflie_sim',
+            executable='crazyflie_server',
+            condition=LaunchConfigurationEquals('backend','hil_sim'),
+            name='crazyflie_server',
+            output='screen',
+            emulate_tty=True,
+            parameters=server_params + [{"hil":True}]
+        ),
         Node(
             package='rviz2',
             namespace='',
