@@ -1,5 +1,4 @@
 from __future__ import annotations
-#!/usr/bin/env python3
 
 """
 Crazyflie Hardware-In-The-Loop Wrapper that uses the firmware Python bindings.
@@ -35,9 +34,10 @@ import threading
 # Only output errors from the logging framework
 logging.basicConfig(level=logging.ERROR)
 
-# Sync variables
-logger_mutex = threading.Lock()
-logger_data = {'z':0.0}
+logger_data_mutex = threading.Lock()
+logger_data = {}
+
+available_cfs = None
 
 class TrajectoryPolynomialPiece:
 
@@ -47,7 +47,10 @@ class TrajectoryPolynomialPiece:
         self.poly_z = poly_z
         self.poly_yaw = poly_yaw
         self.duration = duration
-    
+
+def copy_svec(v):
+    return firm.mkvec(v.x, v.y, v.z)    
+
 class CrazyflieHIL:
 
     # Flight modes.
@@ -58,6 +61,11 @@ class CrazyflieHIL:
     MODE_LOW_VELOCITY = 4
 
     def __init__(self, name, initialPosition, controller_name, time_func):
+        # INIT USB connection
+        self.logger_thread = threading.Thread(target=_motor_data_thread)
+        self.logger_thread.start()
+        
+        # INIT Simulation
         # Core.
         self.name = name
         self.groupMask = 0 # Group mask is currently not used (only 1 USB connection to a crazyflie is supported)
@@ -78,7 +86,7 @@ class CrazyflieHIL:
         # current setpoint
         self.setpoint = firm.setpoint_t()
 
-        # latest sensor values. #TODO: here set the state
+        # latest sensor values.
         self.state = firm.state_t()
         self.state.position.x = self.initialPosition[0]
         self.state.position.y = self.initialPosition[1]
@@ -121,36 +129,33 @@ class CrazyflieHIL:
             raise ValueError('Unknown controller {}'.format(controller_name))
 
     def takeoff(self, targetHeight, duration, groupMask=0):
-        if self._isGroup(groupMask):
-            self.mode = CrazyflieHIL.MODE_HIGH_POLY
-            targetYaw = 0.0
-            firm.plan_takeoff(
-                self.planner,
-                self.cmdHl_pos,
-                self.cmdHl_yaw,
-                targetHeight, targetYaw, duration, self.time_func())
+        self.mode = CrazyflieHIL.MODE_HIGH_POLY
+        targetYaw = 0.0
+        firm.plan_takeoff(
+            self.planner,
+            self.cmdHl_pos,
+            self.cmdHl_yaw,
+            targetHeight, targetYaw, duration, self.time_func())
 
     def land(self, targetHeight, duration, groupMask=0):
-        if self._isGroup(groupMask):
-            self.mode = CrazyflieHIL.MODE_HIGH_POLY
-            targetYaw = 0.0
-            firm.plan_land(
-                self.planner,
-                self.cmdHl_pos,
-                self.cmdHl_yaw,
-                targetHeight, targetYaw, duration, self.time_func())
+        self.mode = CrazyflieHIL.MODE_HIGH_POLY
+        targetYaw = 0.0
+        firm.plan_land(
+            self.planner,
+            self.cmdHl_pos,
+            self.cmdHl_yaw,
+            targetHeight, targetYaw, duration, self.time_func())
 
     def goTo(self, goal, yaw, duration, relative=False, groupMask=0): #Call in crazyflie_server.py L:254
-        if self._isGroup(groupMask):
-            if self.mode != CrazyflieHIL.MODE_HIGH_POLY:
-                # We need to update to the latest firmware that has go_to_from.
-                raise ValueError('goTo from low-level modes not yet supported.')
-            self.mode = CrazyflieHIL.MODE_HIGH_POLY
-            firm.plan_go_to(
-                self.planner,
-                relative,
-                firm.mkvec(*goal),
-                yaw, duration, self.time_func())
+        cf = Crazyflie(rw_cache='./cache')
+        with SyncCrazyflie(available_cfs[0][0], cf=cf) as scf:   #TODO: Can't work simultanious with thread -> dont thread
+            cf.high_level_commander.go_to(goal[0], goal[1], goal[2], yaw, duration, relative) #Send goTo via cfLib to Crazyflie
+        
+        # update simulation until crazyflie reaches destination
+        while (self.state.position.x != goal[0]) or (self.state.position.y != goal[1]) or (self.state.position.z != goal[2]):
+            # Nicht threaden sondern immer nur in funktionen nutzen
+            data = self._get_motor_data()
+            print(data)
 
     def setState(self, state: sim_data_types.State):
         self.state.position.x = state.pos[0]
@@ -291,29 +296,46 @@ class CrazyflieHIL:
 
         return sim_data_types.State(pos, vel, quat, omega)
 
-def get_motor_data():
+    def _get_motor_data(self):        
+        data = {}
+        
+        logger_data_mutex.acquire()
+
+        data['m1'] = logger_data['m1']
+        data['m2'] = logger_data['m2']
+        data['m3'] = logger_data['m3']
+        data['m4'] = logger_data['m4']
+
+        logger_data_mutex.release()
+
+        return data
+
+def _motor_data_thread():
     # Initialize the low-level drivers (don't list the debug drivers)
     cflib.crtp.init_drivers(enable_debug_driver=False)
 
     # Scan for Crazyflies and use the first one found
     print('Scanning interfaces for Crazyflies...')
-    available = cflib.crtp.scan_interfaces()
+    available_cfs = cflib.crtp.scan_interfaces()
 
     print('Crazyflies found:')
-    for i in available:
+    for i in available_cfs:
         print(i[0])
 
-    if len(available) == 0:
-        print('No Crazyflies found, cannot run example')
-        
+    if len(available_cfs) == 0:
+        print('No Crazyflies found, cannot run HIL')
+
     else:
         # Set Log Config
         lg_stab = LogConfig(name='Motor', period_in_ms=20)
-        lg_stab.add_variable('stateEstimate.z', 'float')
+        lg_stab.add_variable('motor.m1', 'uint32_t')
+        lg_stab.add_variable('motor.m2', 'uint32_t')
+        lg_stab.add_variable('motor.m3', 'uint32_t')
+        lg_stab.add_variable('motor.m4', 'uint32_t')
 
         # Start the logger
         cf = Crazyflie(rw_cache='./cache')
-        with SyncCrazyflie(available[0][0], cf=cf) as scf:
+        with SyncCrazyflie(available_cfs[0][0], cf=cf) as scf:
 
             with SyncLogger(scf, [lg_stab]) as logger:
                 for log_entry in logger:
@@ -322,19 +344,11 @@ def get_motor_data():
                     data = log_entry[1]
                     logconf_name = log_entry[2]
 
-                    # set new data in shared variable
-                    hw_data_mutex.acquire()
+                    logger_data_mutex.acquire()
 
-                    hw_data['z'] = data['stateEstimate.z'] - Z_BIAS
+                    logger_data['m1'] = data['motor.m1']
+                    logger_data['m2'] = data['motor.m2']
+                    logger_data['m3'] = data['motor.m3']
+                    logger_data['m4'] = data['motor.m4']
 
-                    # Set starting bias
-                    if (FIRST_TIME):
-                        Z_BIAS = hw_data['z']
-                        hw_data['z'] -= Z_BIAS
-                        FIRST_TIME = False
-
-                    hw_data['z'] *= 3.0
-
-                    hw_data_mutex.release()
-
-                    print(hw_data['z'])
+                    logger_data_mutex.release()
