@@ -19,8 +19,6 @@ import rowan
 
 from . import sim_data_types
 
-from cflib.positioning.motion_commander import MotionCommander
-
 # Logger Imports
 import logging
 import time
@@ -31,6 +29,8 @@ from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from cflib.crazyflie.syncLogger import SyncLogger
 
+from threading import Timer
+from cflib.utils import uri_helper
 import threading
 
 # Only output errors from the logging framework
@@ -49,11 +49,83 @@ class TrajectoryPolynomialPiece:
 def copy_svec(v):
     return firm.mkvec(v.x, v.y, v.z)    
 
-class ComTask:
-    IDLE = 0
-    TAKEOFF = 1
-    LAND = 2
-    GOTO = 3
+class CrazyflieHILLogger:
+    def __init__(self, link_uri="usb://0"):
+        """ Initialize and run the example with the specified link_uri """
+
+        self._cf = Crazyflie(rw_cache='./cache')
+
+        self.data = {"m1":0, "m2":0, "m3":0, "m4":0}
+
+        # Connect some callbacks from the Crazyflie API
+        self._cf.connected.add_callback(self._connected)
+        self._cf.disconnected.add_callback(self._disconnected)
+        self._cf.connection_failed.add_callback(self._connection_failed)
+        self._cf.connection_lost.add_callback(self._connection_lost)
+
+        print('Connecting to %s' % link_uri)
+
+        # Try to connect to the Crazyflie
+        self._cf.open_link(link_uri)
+
+        # Variable used to keep main loop occupied until disconnect
+        self.is_connected = True
+
+    def _connected(self, link_uri):
+        """ This callback is called form the Crazyflie API when a Crazyflie
+        has been connected and the TOCs have been downloaded."""
+        print('Connected to %s' % link_uri)
+
+        # defining the variables to log
+        self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
+        self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('stabilizer.roll', 'float')
+
+        try:
+            self._cf.log.add_config(self._lg_pwm)
+            # This callback will receive the data
+            self._lg_pwm.data_received_cb.add_callback(self._pwm_log_data)
+            # This callback will be called on errors
+            self._lg_pwm.error_cb.add_callback(self._pwm_log_error)
+            # Start the logging
+            self._lg_pwm.start()
+        except KeyError as e:
+            print('Could not start log configuration,'
+                  '{} not found in TOC'.format(str(e)))
+        except AttributeError:
+            print('Could not add Stabilizer log config, bad configuration.')
+
+    def _pwm_log_error(self, logconf, msg):
+        """Callback from the log API when an error occurs"""
+        print('Error when logging %s: %s' % (logconf.name, msg))
+
+    def _pwm_log_data(self, timestamp, data, logconf):
+        """Callback from a the log API when data arrives"""
+        self.data["m1"] = data["pwm.m1_pwm"]
+        self.data["m2"] = data["pwm.m2_pwm"]
+        self.data["m3"] = data["pwm.m3_pwm"]
+        self.data["m4"] = data["pwm.m4_pwm"]
+        #print(data)
+
+        
+
+    def _connection_failed(self, link_uri, msg):
+        """Callback when connection initial connection fails (i.e no Crazyflie
+        at usb)"""
+        print('Connection to %s failed: %s' % (link_uri, msg))
+        self.is_connected = False
+
+    def _connection_lost(self, link_uri, msg):
+        """Callback when disconnected after a connection has been made"""
+        print('Connection to %s lost: %s' % (link_uri, msg))
+
+    def _disconnected(self, link_uri):
+        """Callback when the Crazyflie is disconnected (called in all cases)"""
+        print('Disconnected from %s' % link_uri)
+        self.is_connected = False
 
 class CrazyflieHIL:
 
@@ -66,7 +138,9 @@ class CrazyflieHIL:
 
     def __init__(self, name, initialPosition, controller_name, time_func):
         # INIT HW CRAZYFLIE and USB connection
-        
+        # Initialize the low-level drivers
+        cflib.crtp.init_drivers()
+        self.cf_hil_logger = CrazyflieHILLogger()
 
         # INIT Simulation
         # Core.
@@ -101,8 +175,6 @@ class CrazyflieHIL:
         self.state.attitude.pitch = -0  # WARNING: this is in the legacy coordinate system
         self.state.attitude.yaw = 0
 
-        #TODO: Replace with logger thread for motor.m1 - m4 #linkhttps://github.com/bitcraze/crazyflie-firmware/blob/101de77a6746e99410074bd79da6f02e33f4e6c6/src/drivers/src/motors.c#L720
-        
         self.sensors = firm.sensorData_t()
         self.sensors.gyro.x = 0
         self.sensors.gyro.y = 0
@@ -130,10 +202,25 @@ class CrazyflieHIL:
             self.controller = firm.controllerBrescianini
         else:
             raise ValueError('Unknown controller {}'.format(controller_name))
+
+        self.busy = False # Variable to track if the last command was finished
         
-        print(controller_name)
+    def set_motor_pwm(self):
+        for i in range(50000, 60000, 1):
+            time.sleep(0.001)
+            print(i)
+            self.motors_thrust_pwm.motors.m1 = i
+            self.motors_thrust_pwm.motors.m2 = i
+            self.motors_thrust_pwm.motors.m3 = i
+            self.motors_thrust_pwm.motors.m4 = i
+        self.motors_thrust_pwm.motors.m1 = 0
+        self.motors_thrust_pwm.motors.m2 = 0
+        self.motors_thrust_pwm.motors.m3 = 0
+        self.motors_thrust_pwm.motors.m4 = 0
 
     def takeoff(self, targetHeight, duration, groupMask=0):
+        # NOTE: can't be a blocked function. just do everything in a thread.
+        
         self.mode = CrazyflieHIL.MODE_HIGH_POLY
         # TODO: 
         # 1. send via cflib the takeoff command
@@ -142,40 +229,22 @@ class CrazyflieHIL:
         # 4. calculate new position
         # 5. feed back position to crazyflie
         # 6. if targetheight is reached end else go to 2.
-        """ self.motors_thrust_pwm.motors.m1 = 60000
-        self.motors_thrust_pwm.motors.m2 = 60000
-        self.motors_thrust_pwm.motors.m3 = 60000
-        self.motors_thrust_pwm.motors.m4 = 60000 """
-
-        # TODO make it so that you have one log thread and send signals to it, wich activates functions
-
-        cf = Crazyflie(rw_cache='./cache')
-        with SyncCrazyflie(self.available_cfs[0][0], cf=cf) as scf:
-            with MotionCommander(scf, default_height=targetHeight) as mc:
-                time.sleep(1)
-                data = self._get_motor_data()
-                self.motors_thrust_pwm.motors.m1 = data['m1']
-                self.motors_thrust_pwm.motors.m2 = data['m2']
-                self.motors_thrust_pwm.motors.m3 = data['m3']
-                self.motors_thrust_pwm.motors.m4 = data['m4']
-                mc.forward(0.5)
-                time.sleep(1)
-                data = self._get_motor_data()
-                self.motors_thrust_pwm.motors.m1 = data['m1']
-                self.motors_thrust_pwm.motors.m2 = data['m2']
-                self.motors_thrust_pwm.motors.m3 = data['m3']
-                self.motors_thrust_pwm.motors.m4 = data['m4']
-                mc.turn_left(180)
-                time.sleep(1)
-                mc.forward(0.5)
-                time.sleep(1)
-
         
-        data = self._get_motor_data()
+        
+        
+        thread = threading.Thread(target=self.set_motor_pwm)
+        thread.start()
+
+        """ cf = Crazyflie(rw_cache='./cache')
+        with SyncCrazyflie(self.available_cfs[0][0], cf=cf) as scf:
+            scf.cf.high_level_commander.takeoff(targetHeight, duration) """
+        
+        """ data = self._get_motor_data()
+        print(data)
         self.motors_thrust_pwm.motors.m1 = data['m1']
         self.motors_thrust_pwm.motors.m2 = data['m2']
         self.motors_thrust_pwm.motors.m3 = data['m3']
-        self.motors_thrust_pwm.motors.m4 = data['m4']
+        self.motors_thrust_pwm.motors.m4 = data['m4'] """
             
 
     def land(self, targetHeight, duration, groupMask=0):
@@ -261,8 +330,9 @@ class CrazyflieHIL:
     def _fwcontrol_to_sim_data_types_action(self):
 
         """ firm.powerDistribution(self.control, self.motors_thrust_uncapped)
-        firm.powerDistributionCap(self.motors_thrust_uncapped, self.motors_thrust_pwm)"""
-        print(self.motors_thrust_pwm.motors.m1)
+        firm.powerDistributionCap(self.motors_thrust_uncapped, self.motors_thrust_pwm)
+ """
+        #print(self.motors_thrust_pwm.motors.m1)
 
         # self.motors_thrust_pwm.motors.m{1,4} contain the PWM
         # convert PWM -> RPM
@@ -351,77 +421,5 @@ class CrazyflieHIL:
         return sim_data_types.State(pos, vel, quat, omega)
 
     def _get_motor_data(self):        
-        # Start the logger
-        print("Before init")
-        cf = Crazyflie(rw_cache='./cache')
-        logger_data = {}
-        print("before first with")
-        with SyncCrazyflie(self.available_cfs[0][0], cf=cf) as scf:
+        return self.cf_hil_logger.data
 
-            print("fist with")
-            with SyncLogger(scf, [self.lg_stab]) as logger:
-                print("second with")
-                for log_entry in logger:
-                    # isolate data
-                    timestamp = log_entry[0]
-                    data = log_entry[1]
-                    logconf_name = log_entry[2]
-
-                    logger_data['m1'] = data['motor.m1']
-                    logger_data['m2'] = data['motor.m2']
-                    logger_data['m3'] = data['motor.m3']
-                    logger_data['m4'] = data['motor.m4']
-
-                    return logger_data
-
-    def _hil_crazyflie_communication_thread():
-        #refs: https://github.com/bitcraze/crazyflie-lib-python/blob/master/examples/step-by-step/sbs_motion_commander.py
-
-        # Initialize the low-level drivers (don't list the debug drivers)
-        cflib.crtp.init_drivers(enable_debug_driver=False)
-
-        # Scan for Crazyflies and use the first one found
-        print('Scanning interfaces for Crazyflies...')
-        available_cfs = cflib.crtp.scan_interfaces()
-
-        print('Crazyflies found:')
-        for i in available_cfs:
-            print(i[0])
-
-        if len(available_cfs) == 0:
-            print('No Crazyflies found, cannot run HIL')
-
-        else:
-            # Set Log Config
-            logConf = LogConfig(name='Motor', period_in_ms=20)
-            logConf.add_variable('motor.m1', 'uint32_t')
-            logConf.add_variable('motor.m2', 'uint32_t')
-            logConf.add_variable('motor.m3', 'uint32_t')
-            logConf.add_variable('motor.m4', 'uint32_t')
-
-            cf = Crazyflie(rw_cache='./cache')
-            with SyncCrazyflie(available_cfs[0][0], cf=cf) as scf:
-                #add log config
-                scf.cf.log.add_config(logConf)
-                logConf.data_received_cb.add_callback(_data_log_callback)
-                logConf.start()
-
-                global comm_task # shared variable to send commands to the crazyflie
-                #global comm_task_mutex
-
-                #comm_task_mutex = threading.Lock()
-
-                while(True):
-                    if comm_task = 
-
-                logConf.stop()
-
-        
-
-def _data_log_callback(timestamp, data, logconf):
-    print(data)
-    global logger_data
-    logger_data['m1'] = data['motor.m1']
-    logger_data['m2'] = data['motor.m2']
-    logger_data['m3'] = data['motor.m3']
-    logger_data['m4'] = data['motor.m4']
