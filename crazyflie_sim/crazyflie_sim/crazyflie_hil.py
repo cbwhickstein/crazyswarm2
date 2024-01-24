@@ -180,7 +180,6 @@ class CrazyflieHIL:
         self.sensors.gyro.y = 0
         self.sensors.gyro.z = 0
 
-        # current controller output #TODO: Here update from hardware
         self.control = firm.control_t()
         self.motors_thrust_uncapped = firm.motors_thrust_uncapped_t()
         self.motors_thrust_pwm = firm.motors_thrust_pwm_t()
@@ -229,24 +228,9 @@ class CrazyflieHIL:
         # 4. calculate new position
         # 5. feed back position to crazyflie
         # 6. if targetheight is reached end else go to 2.
-        
-        
-        
-        thread = threading.Thread(target=self.set_motor_pwm)
+        thread = threading.Thread(target=self._takeoff_thread, args=(targetHeight, duration, groupMask))
         thread.start()
-
-        """ cf = Crazyflie(rw_cache='./cache')
-        with SyncCrazyflie(self.available_cfs[0][0], cf=cf) as scf:
-            scf.cf.high_level_commander.takeoff(targetHeight, duration) """
-        
-        """ data = self._get_motor_data()
-        print(data)
-        self.motors_thrust_pwm.motors.m1 = data['m1']
-        self.motors_thrust_pwm.motors.m2 = data['m2']
-        self.motors_thrust_pwm.motors.m3 = data['m3']
-        self.motors_thrust_pwm.motors.m4 = data['m4'] """
             
-
     def land(self, targetHeight, duration, groupMask=0):
         self.mode = CrazyflieHIL.MODE_HIGH_POLY
         targetYaw = 0.0
@@ -327,11 +311,23 @@ class CrazyflieHIL:
         return self._fwcontrol_to_sim_data_types_action()
 
     # private functions
+    def _takeoff_thread(self, targetHeight, duration, groupMask=0):
+        self.cf_hil_logger._cf.high_level_commander.takeoff(targetHeight, duration)
+        time.sleep(0.1)
+        while(True):
+            print(self._get_motor_data())
+
+    def _land_thread(self, targetHeight, duration, groupMask=0):
+        pass
+
+    def _goTo_thread(self, goal, yaw, duration, relative=False, groupMask=0):
+        pass
+
     def _fwcontrol_to_sim_data_types_action(self):
 
         """ firm.powerDistribution(self.control, self.motors_thrust_uncapped)
-        firm.powerDistributionCap(self.motors_thrust_uncapped, self.motors_thrust_pwm)
- """
+        firm.powerDistributionCap(self.motors_thrust_uncapped, self.motors_thrust_pwm)"""
+    
         #print(self.motors_thrust_pwm.motors.m1)
 
         # self.motors_thrust_pwm.motors.m{1,4} contain the PWM
@@ -420,6 +416,5 @@ class CrazyflieHIL:
 
         return sim_data_types.State(pos, vel, quat, omega)
 
-    def _get_motor_data(self):        
+    def _get_motor_data(self):
         return self.cf_hil_logger.data
-
