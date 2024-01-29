@@ -12,9 +12,12 @@ Crazyflie Hardware-In-The-Loop Wrapper that uses the firmware Python bindings.
 Create a thread that constantly updates the state to the hardware
 """
 
+# NOTE: I GOT PWM VALUES. but when i turned the flie 90 degree (so motors were facing 90 degree to floor) it stoped and returned 0
+
 # Simulation Imports
 import cffirmware as firm
 import numpy as np
+from numpy import sin, cos, tan
 import rowan
 
 from . import sim_data_types
@@ -142,6 +145,8 @@ class CrazyflieHIL:
         cflib.crtp.init_drivers()
         self.cf_hil_logger = CrazyflieHILLogger()
 
+        self.busy = False # busy flag to determine if the action was finished
+
         # INIT Simulation
         # Core.
         self.name = name
@@ -218,16 +223,7 @@ class CrazyflieHIL:
         self.motors_thrust_pwm.motors.m4 = 0
 
     def takeoff(self, targetHeight, duration, groupMask=0):
-        # NOTE: can't be a blocked function. just do everything in a thread.
-        
         self.mode = CrazyflieHIL.MODE_HIGH_POLY
-        # TODO: 
-        # 1. send via cflib the takeoff command
-        # 2. read motor data
-        # 3. set the self.motors_thrust_pwm.motors.mX variables to the read values
-        # 4. calculate new position
-        # 5. feed back position to crazyflie
-        # 6. if targetheight is reached end else go to 2.
         thread = threading.Thread(target=self._takeoff_thread, args=(targetHeight, duration, groupMask))
         thread.start()
             
@@ -312,10 +308,29 @@ class CrazyflieHIL:
 
     # private functions
     def _takeoff_thread(self, targetHeight, duration, groupMask=0):
+        # TODO: 
+        # 1. send via cflib the takeoff command (done)
+        # 2. read motor data (done)
+        # 3. set the self.motors_thrust_pwm.motors.mX variables to the read values (done)
+        # 4. calculate new position (todo)
+        # 5. feed back position to crazyflie (todo)
+        # 6. if targetheight is reached end else go to 2.
+        while (self.busy == True):
+            time.sleep(0.1)
+        
+        self.busy = True
+
         self.cf_hil_logger._cf.high_level_commander.takeoff(targetHeight, duration)
         time.sleep(0.1)
-        while(True):
-            print(self._get_motor_data())
+        
+        while (self.state.position.z != targetHeight): #NOTE: maybe add a threshold
+            data = self._get_motor_data()
+            self._set_sim_motors(data)
+            self._calc_new_pos_from_data(data)
+            self._set_hw_crazyflie_pos()
+            print(data) # debug print
+        
+        self.busy = False
 
     def _land_thread(self, targetHeight, duration, groupMask=0):
         pass
@@ -418,3 +433,75 @@ class CrazyflieHIL:
 
     def _get_motor_data(self):
         return self.cf_hil_logger.data
+
+    def _set_sim_motors(self, data):
+        self.motors_thrust_pwm.motors.m1 = data["m1"]
+        self.motors_thrust_pwm.motors.m2 = data["m2"]
+        self.motors_thrust_pwm.motors.m3 = data["m3"]
+        self.motors_thrust_pwm.motors.m4 = data["m4"]
+
+    def _calc_new_pos_from_data(self, new_data):
+        # CONSTANTS
+        m = 1 #TODO replace with real mass of crazyflie
+
+        # calc force fore each motor
+        new_force = [self.pwm_to_force(new_data["m1"]), 
+                     self.pwm_to_force(new_data["m2"]),
+                     self.pwm_to_force(new_data["m3"]),
+                     self.pwm_to_force(new_data["m4"])]
+
+        # create force vectors for each motor
+        yaw = np.radians(self.state.attitude.yaw)
+        roll = np.radians(self.state.attitude.roll)
+        pitch = np.radians(self.state.attitude.pitch)
+
+        rotation_matrix = np.matrix( # Euler-Cartesian Rotation Matrix. ref: Multirotor Areial Vehicles: P. 21
+            [
+                [cos(yaw) * cos(pitch) - sin(roll) * sin(yaw) * sin(pitch),     -cos(roll) * sin(yaw),      cos(yaw) * sin(pitch) + cos(pitch) * sin(roll) * sin(yaw)], 
+                [cos(pitch) * sin(yaw) + cos(yaw) * sin(roll) * sin(pitch),     cos(roll) * cos(yaw) ,      sin(yaw) * sin(pitch) - cos(yaw) * cos(pitch) * sin(roll)], 
+                [-cos(roll) * sin(pitch)                                  ,     sin(roll)            ,      cos(roll) * cos(pitch)                                   ],
+            ]
+        )
+
+        # Get force vectors: multiply rotation matrix with unit vector and scalar multiply with the force of the motor
+        force_vec_m1 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[0]
+        force_vec_m2 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[1]
+        force_vec_m3 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[2]
+        force_vec_m4 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[3]
+
+        # simplified calc without rotor flapping and induced drag (TODO: Include rotor flapping)
+        # Thrust to force (calc of new velocity) https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/thrust-force/
+        new_z_velocity = ((F * (t2-t1)) + (m * old_v))/m #TODO add a time variable that checks passed time
+
+        new_position = []
+        new_velocity = []
+        new_rotation = []
+
+        self._set_sim_crazyflie_pos(new_position, new_velocity, new_rotation)
+        self._set_hw_crazyflie_pos(new_position, new_velocity, new_rotation)
+
+        
+
+    def _set_hw_crazyflie_pos(self, position: list, velocity: list, rotation: list):
+        # Add the new estimator in estimator_hil.c, add the state as toc variables, make a write here for these
+        pass
+
+    def _set_sim_crazyflie_pos(self, position: list, velocity: list, rotation: list):
+        self.state.position.x = position[0]
+        self.state.position.y = position[1]
+        self.state.position.z = position[2]
+
+        self.state.velocity.x = velocity[0]
+        self.state.velocity.y = velocity[1]
+        self.state.velocity.z = velocity[2]
+
+        self.state.attitude.roll    = rotation[0]
+        self.state.attitude.pitch   = rotation[1]
+        self.state.attitude.yaw     = rotation[2]
+
+    def pwm_to_force(self, pwm):
+        # polyfit using data and scripts from https://github.com/IMRCLab/crazyflie-system-id
+        p = [1.71479058e-09,  8.80284482e-05, -2.21152097e-01]
+        force_in_grams = np.polyval(p, pwm)
+        force_in_newton = force_in_grams * 9.81 / 1000.0
+        return np.maximum(force_in_newton, 0)
