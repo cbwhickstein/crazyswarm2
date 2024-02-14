@@ -25,6 +25,7 @@ from . import sim_data_types
 # Logger Imports
 import logging
 import time
+import random
 
 import cflib.crtp
 from cflib.crazyflie import Crazyflie
@@ -62,6 +63,7 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
 
         # Connect some callbacks from the Crazyflie API
         self._cf.connected.add_callback(self._connected)
+        self._cf.fully_connected.add_callback(self._fully_connected)
         self._cf.disconnected.add_callback(self._disconnected)
         self._cf.connection_failed.add_callback(self._connection_failed)
         self._cf.connection_lost.add_callback(self._connection_lost)
@@ -74,12 +76,87 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         # Variable used to keep main loop occupied until disconnect
         self.is_connected = True
 
-    def _connected(self, link_uri): 
+        self._param_check_list = []
+        self._param_groups = []
+
+    def _connected(self, link_uri):
         """ This callback is called form the Crazyflie API when a Crazyflie
-        has been connected and the TOCs have been downloaded."""
+        has been connected and the TOCs have been downloaded. Parameter values are not downloaded yet."""
         print('Connected to %s' % link_uri)
 
-        # defining the variables to log
+        # Print the param TOC when using the print statements
+        p_toc = self._cf.param.toc.toc
+        for group in sorted(p_toc.keys()):
+            #print('{}'.format(group))
+            for param in sorted(p_toc[group].keys()):
+                #print('\t{}'.format(param))
+                self._param_check_list.append('{0}.{1}'.format(group, param))
+            self._param_groups.append('{}'.format(group))
+            # For every group, register the callback
+            self._cf.param.add_update_callback(group=group, name=None, cb=self._param_callback)
+
+    def _fully_connected(self, link_uri):
+        """This callback is called when the Crazyflie has been connected and all parameters have been
+        downloaded. It is now OK to set and get parameters."""
+        print(f'Parameters downloaded to {link_uri}')
+
+        # Start logger
+        self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
+        self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('stateEstimate.x', 'float')
+
+
+        # We can get a parameter value directly without using a callback
+        value = self._cf.param.get_value('pid_attitude.pitch_kd')
+        print(f'Value read with get() is {value}')
+
+        # When a parameter is set, the callback is called with the new value
+        self._cf.param.add_update_callback(group='pid_attitude', name='pitch_kd', cb=self._a_pitch_kd_callback)
+        # When setting a value the parameter is automatically read back
+        # and the registered callbacks will get the updated value
+        self._cf.param.set_value('pid_attitude.pitch_kd', 0.1234)
+
+    def _param_callback(self, name, value):
+        """Generic callback registered for all the groups"""
+        #print('{0}: {1}'.format(name, value))
+
+        # Remove each parameter from the list when fetched
+        self._param_check_list.remove(name)
+        if len(self._param_check_list) == 0:
+            print('Have fetched all parameter values.')
+
+            # Remove all the group callbacks
+            for g in self._param_groups:
+                self._cf.param.remove_update_callback(group=g, cb=self._param_callback)
+
+    def _a_pitch_kd_callback(self, name, value):
+        """Callback for pid_attitude.pitch_kd"""
+        print('Read back: {0}={1}'.format(name, value))
+
+        # This is the end of the example, close link
+        self._cf.close_link()
+
+    def _connection_failed(self, link_uri, msg):
+        """Callback when connection initial connection fails (i.e no Crazyflie
+        at the specified address)"""
+        print('Connection to %s failed: %s' % (link_uri, msg))
+        self.is_connected = False
+
+    def _connection_lost(self, link_uri, msg):
+        """Callback when disconnected after a connection has been made (i.e
+        Crazyflie moves out of range)"""
+        print('Connection to %s lost: %s' % (link_uri, msg))
+
+    def _disconnected(self, link_uri):
+        """Callback when the Crazyflie is disconnected (called in all cases)"""
+        print('Disconnected from %s' % link_uri)
+        self.is_connected = False
+
+
+        """ # defining the variables to log
         self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
         self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
         self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
@@ -99,37 +176,48 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
             print('Could not start log configuration,'
                   '{} not found in TOC'.format(str(e)))
         except AttributeError:
-            print('Could not add Stabilizer log config, bad configuration.')
+            print('Could not add Stabilizer log config, bad configuration.') """
+
+
+
+
+    #OLD-------------------------------------------
+        """ self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
+        self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('stateEstimate.x', 'float') """
 
     def _pwm_log_error(self, logconf, msg):
         """Callback from the log API when an error occurs"""
         print('Error when logging %s: %s' % (logconf.name, msg))
 
-    def _pwm_log_data(self, timestamp, data, logconf):
+    #def _pwm_log_data(self, timestamp, data, logconf):
         """Callback from a the log API when data arrives"""
-        self.data["m1"] = data["pwm.m1_pwm"]
+        """ self.data["m1"] = data["pwm.m1_pwm"]
         self.data["m2"] = data["pwm.m2_pwm"]
         self.data["m3"] = data["pwm.m3_pwm"]
         self.data["m4"] = data["pwm.m4_pwm"]
         print(data)
-        #self._cf.param.set_value('stateEstimate.x', '5')
+        #self._cf.param.set_value('stateEstimate.x', '5') """
 
         
 
-    def _connection_failed(self, link_uri, msg):
+    #def _connection_failed(self, link_uri, msg):
         """Callback when connection initial connection fails (i.e no Crazyflie
         at usb)"""
-        print('Connection to %s failed: %s' % (link_uri, msg))
-        self.is_connected = False
+        """ print('Connection to %s failed: %s' % (link_uri, msg))
+        self.is_connected = False """
 
-    def _connection_lost(self, link_uri, msg):
+    #def _connection_lost(self, link_uri, msg):
         """Callback when disconnected after a connection has been made"""
-        print('Connection to %s lost: %s' % (link_uri, msg))
+        """ print('Connection to %s lost: %s' % (link_uri, msg)) """
 
-    def _disconnected(self, link_uri):
+    #def _disconnected(self, link_uri):
         """Callback when the Crazyflie is disconnected (called in all cases)"""
-        print('Disconnected from %s' % link_uri)
-        self.is_connected = False
+        """ print('Disconnected from %s' % link_uri)
+        self.is_connected = False """
 
 class CrazyflieHIL:
 
@@ -309,6 +397,7 @@ class CrazyflieHIL:
 
     # private functions
     def _takeoff_thread(self, targetHeight, duration, groupMask=0):
+        pass
         # TODO: 
         # 1. send via cflib the takeoff command (done)
         # 2. read motor data (done)
