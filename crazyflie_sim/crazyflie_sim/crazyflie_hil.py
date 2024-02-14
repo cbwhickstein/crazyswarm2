@@ -52,7 +52,7 @@ class TrajectoryPolynomialPiece:
 def copy_svec(v):
     return firm.mkvec(v.x, v.y, v.z)    
 
-class CrazyflieHILLogger:
+class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example (https://github.com/bitcraze/crazyflie-lib-python/blob/master/examples/parameters/basicparam.py) to also write the state
     def __init__(self, link_uri="usb://0"):
         """ Initialize and run the example with the specified link_uri """
 
@@ -74,7 +74,7 @@ class CrazyflieHILLogger:
         # Variable used to keep main loop occupied until disconnect
         self.is_connected = True
 
-    def _connected(self, link_uri):
+    def _connected(self, link_uri): 
         """ This callback is called form the Crazyflie API when a Crazyflie
         has been connected and the TOCs have been downloaded."""
         print('Connected to %s' % link_uri)
@@ -85,7 +85,7 @@ class CrazyflieHILLogger:
         self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
         self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
         self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('stabilizer.roll', 'float')
+        self._lg_pwm.add_variable('stateEstimate.x', 'float')
 
         try:
             self._cf.log.add_config(self._lg_pwm)
@@ -111,7 +111,8 @@ class CrazyflieHILLogger:
         self.data["m2"] = data["pwm.m2_pwm"]
         self.data["m3"] = data["pwm.m3_pwm"]
         self.data["m4"] = data["pwm.m4_pwm"]
-        #print(data)
+        print(data)
+        #self._cf.param.set_value('stateEstimate.x', '5')
 
         
 
@@ -208,7 +209,7 @@ class CrazyflieHIL:
             raise ValueError('Unknown controller {}'.format(controller_name))
 
         self.busy = False # Variable to track if the last command was finished
-        
+
     def set_motor_pwm(self):
         for i in range(50000, 60000, 1):
             time.sleep(0.001)
@@ -259,12 +260,12 @@ class CrazyflieHIL:
             firm.mkvec(*goal),
             yaw, duration, self.time_func())
 
-    def setState(self, state: sim_data_types.State):
+    def setState(self, state: sim_data_types.State): # Updates the state (called after a step by the crazyflie_server in _timer_callback)
         self.state.position.x = state.pos[0]
         self.state.position.y = state.pos[1]
         self.state.position.z = state.pos[2]
 
-        self.state.velocity.x = state.vel[0]
+        self.state.velocity.x 
         self.state.velocity.y = state.vel[1]
         self.state.velocity.z = state.vel[2]
 
@@ -315,7 +316,7 @@ class CrazyflieHIL:
         # 4. calculate new position (todo)
         # 5. feed back position to crazyflie (todo)
         # 6. if targetheight is reached end else go to 2.
-        while (self.busy == True):
+        while (self.busy == True): # replace with mutex
             time.sleep(0.1)
         
         self.busy = True
@@ -326,8 +327,7 @@ class CrazyflieHIL:
         while (self.state.position.z != targetHeight): #NOTE: maybe add a threshold
             data = self._get_motor_data()
             self._set_sim_motors(data)
-            self._calc_new_pos_from_data(data)
-            self._set_hw_crazyflie_pos()
+            self._set_hw_crazyflie_pos([], [], [])
             print(data) # debug print
         
         self.busy = False
@@ -439,48 +439,6 @@ class CrazyflieHIL:
         self.motors_thrust_pwm.motors.m2 = data["m2"]
         self.motors_thrust_pwm.motors.m3 = data["m3"]
         self.motors_thrust_pwm.motors.m4 = data["m4"]
-
-    def _calc_new_pos_from_data(self, new_data):
-        # CONSTANTS
-        m = 1 #TODO replace with real mass of crazyflie
-
-        # calc force fore each motor
-        new_force = [self.pwm_to_force(new_data["m1"]), 
-                     self.pwm_to_force(new_data["m2"]),
-                     self.pwm_to_force(new_data["m3"]),
-                     self.pwm_to_force(new_data["m4"])]
-
-        # create force vectors for each motor
-        yaw = np.radians(self.state.attitude.yaw)
-        roll = np.radians(self.state.attitude.roll)
-        pitch = np.radians(self.state.attitude.pitch)
-
-        rotation_matrix = np.matrix( # Euler-Cartesian Rotation Matrix. ref: Multirotor Areial Vehicles: P. 21
-            [
-                [cos(yaw) * cos(pitch) - sin(roll) * sin(yaw) * sin(pitch),     -cos(roll) * sin(yaw),      cos(yaw) * sin(pitch) + cos(pitch) * sin(roll) * sin(yaw)], 
-                [cos(pitch) * sin(yaw) + cos(yaw) * sin(roll) * sin(pitch),     cos(roll) * cos(yaw) ,      sin(yaw) * sin(pitch) - cos(yaw) * cos(pitch) * sin(roll)], 
-                [-cos(roll) * sin(pitch)                                  ,     sin(roll)            ,      cos(roll) * cos(pitch)                                   ],
-            ]
-        )
-
-        # Get force vectors: multiply rotation matrix with unit vector and scalar multiply with the force of the motor
-        force_vec_m1 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[0]
-        force_vec_m2 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[1]
-        force_vec_m3 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[2]
-        force_vec_m4 = np.dot(rotation_matrix, np.array([1, 1, 1])) * new_force[3]
-
-        # simplified calc without rotor flapping and induced drag (TODO: Include rotor flapping)
-        # Thrust to force (calc of new velocity) https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/thrust-force/
-        new_z_velocity = ((F * (t2-t1)) + (m * old_v))/m #TODO add a time variable that checks passed time
-
-        new_position = []
-        new_velocity = []
-        new_rotation = []
-
-        self._set_sim_crazyflie_pos(new_position, new_velocity, new_rotation)
-        self._set_hw_crazyflie_pos(new_position, new_velocity, new_rotation)
-
-        
 
     def _set_hw_crazyflie_pos(self, position: list, velocity: list, rotation: list):
         # Add the new estimator in estimator_hil.c, add the state as toc variables, make a write here for these
