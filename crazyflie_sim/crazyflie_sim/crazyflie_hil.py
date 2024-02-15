@@ -14,6 +14,8 @@ Create a thread that constantly updates the state to the hardware
 
 # NOTE: I GOT PWM VALUES. but when i turned the flie 90 degree (so motors were facing 90 degree to floor) it stoped and returned 0
 
+# NEXT STEP: compile the firmware and flash it with defined CONFIG_ESTIMATOR_HIL_ENABLE
+
 # Simulation Imports
 import cffirmware as firm
 import numpy as np
@@ -54,8 +56,11 @@ def copy_svec(v):
     return firm.mkvec(v.x, v.y, v.z)    
 
 class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example (https://github.com/bitcraze/crazyflie-lib-python/blob/master/examples/parameters/basicparam.py) to also write the state
-    def __init__(self, link_uri="usb://0"):
+    def __init__(self, link_uri="usb://0", state=None):
         """ Initialize and run the example with the specified link_uri """
+
+        # Software state of the crazyflie
+        self.cf_state = state
 
         self._cf = Crazyflie(rw_cache='./cache')
 
@@ -99,17 +104,35 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         """This callback is called when the Crazyflie has been connected and all parameters have been
         downloaded. It is now OK to set and get parameters."""
         print(f'Parameters downloaded to {link_uri}')
+    
+        print('Setting the estimator of the Crazyflie to HIL')
+        self._cf.param.set_value('stabilizer.estimator', '2')
 
+        print('Starting Logger for PWM values!')
         # Start logger
         self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
         self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
         self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
         self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
         self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('stateEstimate.x', 'float')
+        #self._lg_pwm.add_variable('kalman.initialX', 'float')
+
+        try:
+            self._cf.log.add_config(self._lg_pwm)
+            # This callback will receive the data
+            self._lg_pwm.data_received_cb.add_callback(self._pwm_log_data)
+            # This callback will be called on errors
+            self._lg_pwm.error_cb.add_callback(self._pwm_log_error)
+            # Start the logging
+            self._lg_pwm.start()
+        except KeyError as e:
+            print('Could not start log configuration,'
+                  '{} not found in TOC'.format(str(e)))
+        except AttributeError:
+            print('Could not add Stabilizer log config, bad configuration.')
 
 
-        # We can get a parameter value directly without using a callback
+        """ # We can get a parameter value directly without using a callback
         value = self._cf.param.get_value('pid_attitude.pitch_kd')
         print(f'Value read with get() is {value}')
 
@@ -117,11 +140,11 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.add_update_callback(group='pid_attitude', name='pitch_kd', cb=self._a_pitch_kd_callback)
         # When setting a value the parameter is automatically read back
         # and the registered callbacks will get the updated value
-        self._cf.param.set_value('pid_attitude.pitch_kd', 0.1234)
+        self._cf.param.set_value('kalman.initialX', 0.1234) """
 
     def _param_callback(self, name, value):
         """Generic callback registered for all the groups"""
-        #print('{0}: {1}'.format(name, value))
+        print('{0}: {1}'.format(name, value))
 
         # Remove each parameter from the list when fetched
         self._param_check_list.remove(name)
@@ -131,13 +154,6 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
             # Remove all the group callbacks
             for g in self._param_groups:
                 self._cf.param.remove_update_callback(group=g, cb=self._param_callback)
-
-    def _a_pitch_kd_callback(self, name, value):
-        """Callback for pid_attitude.pitch_kd"""
-        print('Read back: {0}={1}'.format(name, value))
-
-        # This is the end of the example, close link
-        self._cf.close_link()
 
     def _connection_failed(self, link_uri, msg):
         """Callback when connection initial connection fails (i.e no Crazyflie
@@ -156,68 +172,26 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self.is_connected = False
 
 
-        """ # defining the variables to log
-        self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
-        self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('stateEstimate.x', 'float')
-
-        try:
-            self._cf.log.add_config(self._lg_pwm)
-            # This callback will receive the data
-            self._lg_pwm.data_received_cb.add_callback(self._pwm_log_data)
-            # This callback will be called on errors
-            self._lg_pwm.error_cb.add_callback(self._pwm_log_error)
-            # Start the logging
-            self._lg_pwm.start()
-        except KeyError as e:
-            print('Could not start log configuration,'
-                  '{} not found in TOC'.format(str(e)))
-        except AttributeError:
-            print('Could not add Stabilizer log config, bad configuration.') """
-
-
-
-
-    #OLD-------------------------------------------
-        """ self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
-        self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('stateEstimate.x', 'float') """
-
     def _pwm_log_error(self, logconf, msg):
         """Callback from the log API when an error occurs"""
         print('Error when logging %s: %s' % (logconf.name, msg))
 
-    #def _pwm_log_data(self, timestamp, data, logconf):
+    def _pwm_log_data(self, timestamp, data, logconf):
         """Callback from a the log API when data arrives"""
-        """ self.data["m1"] = data["pwm.m1_pwm"]
+        # Save the generated PWM values
+        self.data["m1"] = data["pwm.m1_pwm"]
         self.data["m2"] = data["pwm.m2_pwm"]
         self.data["m3"] = data["pwm.m3_pwm"]
         self.data["m4"] = data["pwm.m4_pwm"]
-        print(data)
-        #self._cf.param.set_value('stateEstimate.x', '5') """
-
         
+        # Send new position/rotation to Hardware
+        self._cf.param.set_value('hil.simPosX', self.cf_state.position.x)
+        self._cf.param.set_value('hil.simPosY', self.cf_state.position.y)
+        self._cf.param.set_value('hil.simPosZ', self.cf_state.position.z)
 
-    #def _connection_failed(self, link_uri, msg):
-        """Callback when connection initial connection fails (i.e no Crazyflie
-        at usb)"""
-        """ print('Connection to %s failed: %s' % (link_uri, msg))
-        self.is_connected = False """
-
-    #def _connection_lost(self, link_uri, msg):
-        """Callback when disconnected after a connection has been made"""
-        """ print('Connection to %s lost: %s' % (link_uri, msg)) """
-
-    #def _disconnected(self, link_uri):
-        """Callback when the Crazyflie is disconnected (called in all cases)"""
-        """ print('Disconnected from %s' % link_uri)
-        self.is_connected = False """
+        self._cf.param.set_value('hil.simRotPitch', self.cf_state.attitude.pitch)
+        self._cf.param.set_value('hil.simRotRoll', self.cf_state.attitude.roll)
+        self._cf.param.set_value('hil.simRotYaw', self.cf_state.attitude.yaw)
 
 class CrazyflieHIL:
 
@@ -232,7 +206,7 @@ class CrazyflieHIL:
         # INIT HW CRAZYFLIE and USB connection
         # Initialize the low-level drivers
         cflib.crtp.init_drivers()
-        self.cf_hil_logger = CrazyflieHILLogger()
+        self.cf_hil_logger = CrazyflieHILLogger(state=self.state)
 
         self.busy = False # busy flag to determine if the action was finished
 
@@ -268,6 +242,8 @@ class CrazyflieHIL:
         self.state.attitude.roll = 0
         self.state.attitude.pitch = -0  # WARNING: this is in the legacy coordinate system
         self.state.attitude.yaw = 0
+
+        self.cf_hil_logger.cf_state = self.state # set the state accessable for the hil logger
 
         self.sensors = firm.sensorData_t()
         self.sensors.gyro.x = 0
@@ -317,13 +293,8 @@ class CrazyflieHIL:
         thread.start()
             
     def land(self, targetHeight, duration, groupMask=0):
-        self.mode = CrazyflieHIL.MODE_HIGH_POLY
-        targetYaw = 0.0
-        firm.plan_land(
-            self.planner,
-            self.cmdHl_pos,
-            self.cmdHl_yaw,
-            targetHeight, targetYaw, duration, self.time_func())
+        thread = threading.Thread(target=self._goTo_thread, args=(targetHeight, duration, groupMask))
+        thread.start()
 
     def goTo(self, goal, yaw, duration, relative=False, groupMask=0): #Call in crazyflie_server.py L:254
         """ # TODO: maybe add a delay between write and read
@@ -341,12 +312,8 @@ class CrazyflieHIL:
         if self.mode != CrazyflieHIL.MODE_HIGH_POLY:
             # We need to update to the latest firmware that has go_to_from.
             raise ValueError('goTo from low-level modes not yet supported.')
-        self.mode = CrazyflieHIL.MODE_HIGH_POLY
-        firm.plan_go_to(
-            self.planner,
-            relative,
-            firm.mkvec(*goal),
-            yaw, duration, self.time_func())
+        thread = threading.Thread(target=self._goTo_thread, args=(goal, yaw, duration, groupMask))
+        thread.start()
 
     def setState(self, state: sim_data_types.State): # Updates the state (called after a step by the crazyflie_server in _timer_callback)
         self.state.position.x = state.pos[0]
@@ -397,7 +364,6 @@ class CrazyflieHIL:
 
     # private functions
     def _takeoff_thread(self, targetHeight, duration, groupMask=0):
-        pass
         # TODO: 
         # 1. send via cflib the takeoff command (done)
         # 2. read motor data (done)
@@ -416,16 +382,24 @@ class CrazyflieHIL:
         while (self.state.position.z != targetHeight): #NOTE: maybe add a threshold
             data = self._get_motor_data()
             self._set_sim_motors(data)
-            self._set_hw_crazyflie_pos([], [], [])
             print(data) # debug print
         
         self.busy = False
 
     def _land_thread(self, targetHeight, duration, groupMask=0):
-        pass
+        self.cf_hil_logger._cf.high_level_commander.land(targetHeight, duration)
+        while (self.state.position.z != targetHeight): #NOTE: maybe add a threshold
+            data = self._get_motor_data()
+            self._set_sim_motors(data)
+            print(data) # debug print
+        
 
     def _goTo_thread(self, goal, yaw, duration, relative=False, groupMask=0):
-        pass
+        self.cf_hil_logger._cf.high_level_commander.go_to(goal[0], goal[1], goal[2], yaw, duration, relative)
+        while (self.state.position.x != goal[0] and self.state.position.y != goal[1] and self.state.position.z != goal[2]):
+            data = self._get_motor_data()
+            self._set_sim_motors(data)
+            print(data) # debug print
 
     def _fwcontrol_to_sim_data_types_action(self):
 
@@ -528,10 +502,6 @@ class CrazyflieHIL:
         self.motors_thrust_pwm.motors.m2 = data["m2"]
         self.motors_thrust_pwm.motors.m3 = data["m3"]
         self.motors_thrust_pwm.motors.m4 = data["m4"]
-
-    def _set_hw_crazyflie_pos(self, position: list, velocity: list, rotation: list):
-        # Add the new estimator in estimator_hil.c, add the state as toc variables, make a write here for these
-        pass
 
     def _set_sim_crazyflie_pos(self, position: list, velocity: list, rotation: list):
         self.state.position.x = position[0]
