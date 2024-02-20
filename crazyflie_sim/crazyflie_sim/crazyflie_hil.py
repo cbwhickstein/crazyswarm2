@@ -111,10 +111,10 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         print('Starting Logger for PWM values!')
         # Start logger
         self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
-        self._lg_pwm.add_variable('pwm.m1_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m2_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m3_pwm', 'uint16_t')
-        self._lg_pwm.add_variable('pwm.m4_pwm', 'uint16_t')
+        self._lg_pwm.add_variable('motor.m1', 'uint32_t')
+        self._lg_pwm.add_variable('motor.m2', 'uint32_t')
+        self._lg_pwm.add_variable('motor.m3', 'uint32_t')
+        self._lg_pwm.add_variable('motor.m4', 'uint32_t')
         #self._lg_pwm.add_variable('kalman.initialX', 'float')
 
         try:
@@ -179,10 +179,11 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
     def _pwm_log_data(self, timestamp, data, logconf):
         """Callback from a the log API when data arrives"""
         # Save the generated PWM values
-        self.data["m1"] = data["pwm.m1_pwm"]
-        self.data["m2"] = data["pwm.m2_pwm"]
-        self.data["m3"] = data["pwm.m3_pwm"]
-        self.data["m4"] = data["pwm.m4_pwm"]
+        self.data["m1"] = data["motor.m1"]
+        self.data["m2"] = data["motor.m2"]
+        self.data["m3"] = data["motor.m3"]
+        self.data["m4"] = data["motor.m4"]
+        print(data)
         
         # Send new position/rotation to Hardware
         self._cf.param.set_value('hil.simPosX', self.cf_state.position.x)
@@ -203,11 +204,6 @@ class CrazyflieHIL:
     MODE_LOW_VELOCITY = 4
 
     def __init__(self, name, initialPosition, controller_name, time_func):
-        # INIT HW CRAZYFLIE and USB connection
-        # Initialize the low-level drivers
-        cflib.crtp.init_drivers()
-        self.cf_hil_logger = CrazyflieHILLogger(state=self.state)
-
         self.busy = False # busy flag to determine if the action was finished
 
         # INIT Simulation
@@ -243,8 +239,6 @@ class CrazyflieHIL:
         self.state.attitude.pitch = -0  # WARNING: this is in the legacy coordinate system
         self.state.attitude.yaw = 0
 
-        self.cf_hil_logger.cf_state = self.state # set the state accessable for the hil logger
-
         self.sensors = firm.sensorData_t()
         self.sensors.gyro.x = 0
         self.sensors.gyro.y = 0
@@ -273,6 +267,10 @@ class CrazyflieHIL:
             raise ValueError('Unknown controller {}'.format(controller_name))
 
         self.busy = False # Variable to track if the last command was finished
+
+        # INIT HW CRAZYFLIE and USB connection
+        cflib.crtp.init_drivers()
+        self.cf_hil_logger = CrazyflieHILLogger(state=self.state)
 
     def set_motor_pwm(self):
         for i in range(50000, 60000, 1):
@@ -382,7 +380,7 @@ class CrazyflieHIL:
         while (self.state.position.z != targetHeight): #NOTE: maybe add a threshold
             data = self._get_motor_data()
             self._set_sim_motors(data)
-            print(data) # debug print
+            #print(data) # debug print
         
         self.busy = False
 
