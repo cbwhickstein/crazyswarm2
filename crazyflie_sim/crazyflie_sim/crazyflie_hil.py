@@ -61,6 +61,7 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
 
         # Software state of the crazyflie
         self.cf_state = state
+        self.estimator_init_done = False
 
         self._cf = Crazyflie(rw_cache='./cache')
 
@@ -84,6 +85,7 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._param_check_list = []
         self._param_groups = []
 
+    # Crazyflie connection callbacks
     def _connected(self, link_uri):
         """ This callback is called form the Crazyflie API when a Crazyflie
         has been connected and the TOCs have been downloaded. Parameter values are not downloaded yet."""
@@ -105,16 +107,21 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         downloaded. It is now OK to set and get parameters."""
         print(f'Parameters downloaded to {link_uri}')
     
+        # Setting the estimator to the hil one and wait until switch is done
         print('Setting the estimator of the Crazyflie to HIL')
-        self._cf.param.set_value('stabilizer.estimator', '2')
+        self._cf.param.add_update_callback(group="stabilizer", name="estimator", cb=self._param_estimator_callback)
+        self._cf.param.set_value('stabilizer.estimator', '2') # defined CONFIG_ESTIMATOR_HIL at estimator.h <- makes the startup slow af
+        while not self.estimator_init_done: # Waits for the estimator change in the self._param_estimator_callback function
+            time.sleep(0.1)
 
-        print('Starting Logger for PWM values!')
         # Start logger
+        print('Starting Logger for PWM values!')
         self._lg_pwm = LogConfig(name='PWM', period_in_ms=10)
         self._lg_pwm.add_variable('motor.m1', 'uint32_t')
         self._lg_pwm.add_variable('motor.m2', 'uint32_t')
         self._lg_pwm.add_variable('motor.m3', 'uint32_t')
         self._lg_pwm.add_variable('motor.m4', 'uint32_t')
+        self._lg_pwm.add_variable('stateEstimate.z', 'float')
         #self._lg_pwm.add_variable('kalman.initialX', 'float')
 
         try:
@@ -132,6 +139,29 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
             print('Could not add Stabilizer log config, bad configuration.')
 
 
+
+        # Send new position/rotation to Hardware
+        self._cf.param.add_update_callback(group="hil", name="simPosX", cb=self._param_simPosX_callback)
+        self._cf.param.add_update_callback(group="hil", name="simPosY", cb=self._param_simPosY_callback)
+        self._cf.param.add_update_callback(group="hil", name="simPosZ", cb=self._param_simPosZ_callback)
+
+        self._cf.param.add_update_callback(group="hil", name="simRotPitch", cb=self._param_simRotPitch_callback)
+        self._cf.param.add_update_callback(group="hil", name="simRotRoll", cb=self._param_simRotRoll_callback)
+        self._cf.param.add_update_callback(group="hil", name="simRotYaw", cb=self._param_simRotYaw_callback)
+
+
+        self._cf.param.set_value('hil.simPosX', self.cf_state.position.x)
+        self._cf.param.set_value('hil.simPosY', self.cf_state.position.y)
+        self._cf.param.set_value('hil.simPosZ', self.cf_state.position.z)
+
+        self._cf.param.set_value('hil.simRotPitch', self.cf_state.attitude.pitch)
+        self._cf.param.set_value('hil.simRotRoll', self.cf_state.attitude.roll)
+        self._cf.param.set_value('hil.simRotYaw', self.cf_state.attitude.yaw)
+
+        hwz = self._cf.param.get_value('hil.simPosZ')
+        print("HW: {}, SW: {}".format(hwz, self.cf_state.position.z))
+
+
         """ # We can get a parameter value directly without using a callback
         value = self._cf.param.get_value('pid_attitude.pitch_kd')
         print(f'Value read with get() is {value}')
@@ -141,19 +171,6 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         # When setting a value the parameter is automatically read back
         # and the registered callbacks will get the updated value
         self._cf.param.set_value('kalman.initialX', 0.1234) """
-
-    def _param_callback(self, name, value):
-        """Generic callback registered for all the groups"""
-        print('{0}: {1}'.format(name, value))
-
-        # Remove each parameter from the list when fetched
-        self._param_check_list.remove(name)
-        if len(self._param_check_list) == 0:
-            print('Have fetched all parameter values.')
-
-            # Remove all the group callbacks
-            for g in self._param_groups:
-                self._cf.param.remove_update_callback(group=g, cb=self._param_callback)
 
     def _connection_failed(self, link_uri, msg):
         """Callback when connection initial connection fails (i.e no Crazyflie
@@ -171,7 +188,7 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         print('Disconnected from %s' % link_uri)
         self.is_connected = False
 
-
+    # Logging callbacks
     def _pwm_log_error(self, logconf, msg):
         """Callback from the log API when an error occurs"""
         print('Error when logging %s: %s' % (logconf.name, msg))
@@ -184,16 +201,51 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self.data["m3"] = data["motor.m3"]
         self.data["m4"] = data["motor.m4"]
         print(data)
-        
-        # Send new position/rotation to Hardware
+
+    # HW state parameter callbacks
+    def _param_simPosX_callback(self, name, value):
+        #print('{0}: {1}'.format(name, value))
         self._cf.param.set_value('hil.simPosX', self.cf_state.position.x)
+
+    def _param_simPosY_callback(self, name, value):
+        #print('{0}: {1}'.format(name, value))
         self._cf.param.set_value('hil.simPosY', self.cf_state.position.y)
+
+    def _param_simPosZ_callback(self, name, value):
+        #print('{0}: {1}'.format(name, value))
         self._cf.param.set_value('hil.simPosZ', self.cf_state.position.z)
 
+
+    def _param_simRotPitch_callback(self, name, value):
+        #print('{0}: {1}'.format(name, value))
         self._cf.param.set_value('hil.simRotPitch', self.cf_state.attitude.pitch)
+
+    def _param_simRotRoll_callback(self, name, value):
+        #print('{0}: {1}'.format(name, value))
         self._cf.param.set_value('hil.simRotRoll', self.cf_state.attitude.roll)
+
+    def _param_simRotYaw_callback(self, name, value):
+        #print('{0}: {1}'.format(name, value))
         self._cf.param.set_value('hil.simRotYaw', self.cf_state.attitude.yaw)
 
+    def _param_estimator_callback(self, name, value):
+        print(value)
+        if value == "3":
+            self.estimator_init_done = True
+
+    def _param_callback(self, name, value):
+        """Generic callback registered for all the groups"""
+        print('{0}: {1}'.format(name, value))
+
+        # Remove each parameter from the list when fetched
+        self._param_check_list.remove(name)
+        if len(self._param_check_list) == 0:
+            print('Have fetched all parameter values.')
+
+            # Remove all the group callbacks
+            for g in self._param_groups:
+                self._cf.param.remove_update_callback(group=g, cb=self._param_callback)
+        
 class CrazyflieHIL:
 
     # Flight modes.
@@ -275,7 +327,7 @@ class CrazyflieHIL:
     def set_motor_pwm(self):
         for i in range(50000, 60000, 1):
             time.sleep(0.001)
-            print(i)
+            #print(i)
             self.motors_thrust_pwm.motors.m1 = i
             self.motors_thrust_pwm.motors.m2 = i
             self.motors_thrust_pwm.motors.m3 = i
@@ -369,7 +421,8 @@ class CrazyflieHIL:
         # 4. calculate new position (todo)
         # 5. feed back position to crazyflie (todo)
         # 6. if targetheight is reached end else go to 2.
-        while (self.busy == True): # replace with mutex
+        self.set_motor_pwm()
+        """ while (self.busy == True): # replace with mutex
             time.sleep(0.1)
         
         self.busy = True
@@ -382,14 +435,14 @@ class CrazyflieHIL:
             self._set_sim_motors(data)
             #print(data) # debug print
         
-        self.busy = False
+        self.busy = False """
 
     def _land_thread(self, targetHeight, duration, groupMask=0):
         self.cf_hil_logger._cf.high_level_commander.land(targetHeight, duration)
         while (self.state.position.z != targetHeight): #NOTE: maybe add a threshold
             data = self._get_motor_data()
             self._set_sim_motors(data)
-            print(data) # debug print
+            #print(data) # debug print
         
 
     def _goTo_thread(self, goal, yaw, duration, relative=False, groupMask=0):
@@ -397,7 +450,7 @@ class CrazyflieHIL:
         while (self.state.position.x != goal[0] and self.state.position.y != goal[1] and self.state.position.z != goal[2]):
             data = self._get_motor_data()
             self._set_sim_motors(data)
-            print(data) # debug print
+            #print(data) # debug print
 
     def _fwcontrol_to_sim_data_types_action(self):
 
@@ -496,10 +549,10 @@ class CrazyflieHIL:
         return self.cf_hil_logger.data
 
     def _set_sim_motors(self, data):
-        self.motors_thrust_pwm.motors.m1 = data["m1"]
-        self.motors_thrust_pwm.motors.m2 = data["m2"]
-        self.motors_thrust_pwm.motors.m3 = data["m3"]
-        self.motors_thrust_pwm.motors.m4 = data["m4"]
+        self.motors_thrust_pwm.motors.m1 = data["m1"]*2.0
+        self.motors_thrust_pwm.motors.m2 = data["m2"]*2.0
+        self.motors_thrust_pwm.motors.m3 = data["m3"]*2.0
+        self.motors_thrust_pwm.motors.m4 = data["m4"]*2.0
 
     def _set_sim_crazyflie_pos(self, position: list, velocity: list, rotation: list):
         self.state.position.x = position[0]
