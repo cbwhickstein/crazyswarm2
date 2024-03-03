@@ -108,11 +108,11 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         print(f'Parameters downloaded to {link_uri}')
     
         # Setting the estimator to the hil one and wait until switch is done
-        print('Setting the estimator of the Crazyflie to HIL')
+        """ print('Setting the estimator of the Crazyflie to HIL')
         self._cf.param.add_update_callback(group="stabilizer", name="estimator", cb=self._param_estimator_callback)
         self._cf.param.set_value('stabilizer.estimator', '2') # defined CONFIG_ESTIMATOR_HIL at estimator.h <- makes the startup slow af
         while not self.estimator_init_done: # Waits for the estimator change in the self._param_estimator_callback function
-            time.sleep(0.1)
+            time.sleep(0.1) """
 
         # Start logger
         print('Starting Logger for PWM values!')
@@ -121,7 +121,7 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._lg_pwm.add_variable('motor.m2', 'uint32_t')
         self._lg_pwm.add_variable('motor.m3', 'uint32_t')
         self._lg_pwm.add_variable('motor.m4', 'uint32_t')
-        self._lg_pwm.add_variable('stateEstimate.z', 'float')
+        self._lg_pwm.add_variable('hil.testparam', 'float')
         #self._lg_pwm.add_variable('kalman.initialX', 'float')
 
         try:
@@ -138,6 +138,31 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         except AttributeError:
             print('Could not add Stabilizer log config, bad configuration.')
 
+
+        # Test estimator data logger
+        self._lg_stab = LogConfig(name='stab', period_in_ms=10)
+        self._lg_stab.add_variable('stateEstimate.x', 'float')
+        self._lg_stab.add_variable('stateEstimate.y', 'float')
+        self._lg_stab.add_variable('stateEstimate.z', 'float')
+
+        self._lg_stab.add_variable('stabilizer.pitch', 'float')
+        self._lg_stab.add_variable('stabilizer.roll', 'float')
+        self._lg_stab.add_variable('stabilizer.yaw', 'float')
+
+
+        try:
+            self._cf.log.add_config(self._lg_stab)
+            # This callback will receive the data
+            self._lg_stab.data_received_cb.add_callback(self._stab_log_data)
+            # This callback will be called on errors
+            self._lg_stab.error_cb.add_callback(self._stab_log_error)
+            # Start the logging
+            self._lg_stab.start()
+        except KeyError as e:
+            print('Could not start log configuration,'
+                  '{} not found in TOC'.format(str(e)))
+        except AttributeError:
+            print('Could not add Stabilizer log config, bad configuration.')
 
 
         # Send new position/rotation to Hardware
@@ -200,6 +225,15 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self.data["m2"] = data["motor.m2"]
         self.data["m3"] = data["motor.m3"]
         self.data["m4"] = data["motor.m4"]
+        #print(data)
+
+
+    # test logging callbacks
+    def _stab_log_error(self, logconf, msg):
+        """Callback from the log API when an error occurs"""
+        print('Error when logging %s: %s' % (logconf.name, msg))
+
+    def _stab_log_data(self, timestamp, data, logconf):
         print(data)
 
     # HW state parameter callbacks
