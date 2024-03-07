@@ -34,6 +34,8 @@ from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from cflib.crazyflie.syncLogger import SyncLogger
+from cflib.crazyflie.mem import Poly4D
+from cflib.crazyflie.mem import MemoryElement
 
 from threading import Timer
 from cflib.utils import uri_helper
@@ -183,8 +185,10 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.set_value('hil.simRotRoll', self.cf_state.attitude.roll)
         self._cf.param.set_value('hil.simRotYaw', self.cf_state.attitude.yaw)
 
+
         hwz = self._cf.param.get_value('hil.simPosZ')
-        print("HW: {}, SW: {}".format(hwz, self.cf_state.position.z))
+        #print("HW: {}, SW: {}".format(hwz, self.cf_state.position.z))
+        print("Initial State: \n\tPosX: {}\n\tPosY: {}\n\tPosZ: {}\n\tRoll: {}\n\tPitch: {}\n\tYaw: {}".format(self.cf_state.position.x, self.cf_state.position.y, self.cf_state.position.z, self.cf_state.attitude.roll, self.cf_state.attitude.pitch, self.cf_state.attitude.yaw))
 
 
         """ # We can get a parameter value directly without using a callback
@@ -234,7 +238,8 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         print('Error when logging %s: %s' % (logconf.name, msg))
 
     def _stab_log_data(self, timestamp, data, logconf):
-        print(data)
+        #print(data)
+        pass
 
     # HW state parameter callbacks
     def _param_simPosX_callback(self, name, value):
@@ -446,6 +451,35 @@ class CrazyflieHIL:
                 tick)
         return self._fwcontrol_to_sim_data_types_action()
 
+    def uploadTrajectory(self, trajectory_id, pieceOffset, pieces: [TrajectoryPolynomialPiece]):
+        # Modiefed version of https://github.com/bitcraze/crazyflie-lib-python/blob/3e84ceefb3659da2d306c76db078eb9c2ef1f6ef/examples/mocap/mocap_hl_commander.py#L185
+        trajectory_mem = self.cf_hil_logger._cf.mem.get_mems(MemoryElement.TYPE_TRAJ)[0]
+        trajectory_mem.trajectory = []
+
+        total_duration = 0
+        for row in pieces:
+            duration = row.duration
+            x = row.poly_x
+            y = row.poly_y
+            z = row.poly_z
+            yaw = row.poly_yaw
+            trajectory_mem.trajectory.append(Poly4D(duration, x, y, z, yaw))
+            total_duration += duration
+
+        upload_result = trajectory_mem.write_data_sync()
+        if not upload_result:
+            print('Upload failed, aborting!')
+            sys.exit(1)
+        self.cf_hil_logger._cf.high_level_commander.define_trajectory(trajectory_id, 0, len(trajectory_mem.trajectory))
+
+    def startTrajectory(self,
+                        trajectoryId: int,
+                        timescale: float = 1.0,
+                        reverse: bool = False,
+                        relative: bool = True,
+                        groupMask: int = 0):
+        self.cf_hil_logger._cf.high_level_commander.start_trajectory(trajectoryId, timescale, relative, reverse, groupMask)
+
     # private functions
     def _takeoff_thread(self, targetHeight, duration, groupMask=0):
         # TODO: 
@@ -455,9 +489,8 @@ class CrazyflieHIL:
         # 4. calculate new position (todo)
         # 5. feed back position to crazyflie (todo)
         # 6. if targetheight is reached end else go to 2.
-        self.set_motor_pwm()
         """ while (self.busy == True): # replace with mutex
-            time.sleep(0.1)
+            time.sleep(0.1) """
         
         self.busy = True
 
@@ -469,7 +502,7 @@ class CrazyflieHIL:
             self._set_sim_motors(data)
             #print(data) # debug print
         
-        self.busy = False """
+        self.busy = False
 
     def _land_thread(self, targetHeight, duration, groupMask=0):
         self.cf_hil_logger._cf.high_level_commander.land(targetHeight, duration)
@@ -583,10 +616,10 @@ class CrazyflieHIL:
         return self.cf_hil_logger.data
 
     def _set_sim_motors(self, data):
-        self.motors_thrust_pwm.motors.m1 = data["m1"]*2.0
-        self.motors_thrust_pwm.motors.m2 = data["m2"]*2.0
-        self.motors_thrust_pwm.motors.m3 = data["m3"]*2.0
-        self.motors_thrust_pwm.motors.m4 = data["m4"]*2.0
+        self.motors_thrust_pwm.motors.m1 = data["m1"]#*2.0
+        self.motors_thrust_pwm.motors.m2 = data["m2"]#*2.0
+        self.motors_thrust_pwm.motors.m3 = data["m3"]#*2.0
+        self.motors_thrust_pwm.motors.m4 = data["m4"]#*2.0
 
     def _set_sim_crazyflie_pos(self, position: list, velocity: list, rotation: list):
         self.state.position.x = position[0]
@@ -607,3 +640,32 @@ class CrazyflieHIL:
         force_in_grams = np.polyval(p, pwm)
         force_in_newton = force_in_grams * 9.81 / 1000.0
         return np.maximum(force_in_newton, 0)
+
+    
+
+    """
+    When uploading a trajectory to the simulator it crashes with the following error message.
+    Below the error messages are 2 solution methods but it was to late to test them.
+
+    [crazyflie_server-4]   File "/home/christian/Schreibtisch/Studium/Bachelorarbeit/Simulators/ros2_ws/install/crazyflie_sim/local/lib/python3.10/dist-packages/crazyflie_sim/crazyflie_server.py", line 292, in _upload_trajectory_callback
+    [crazyflie_server-4]     cf.uploadTrajectory(request.trajectory_id, request.piece_offset, pieces)
+    [crazyflie_server-4]   File "/home/christian/Schreibtisch/Studium/Bachelorarbeit/Simulators/ros2_ws/install/crazyflie_sim/local/lib/python3.10/dist-packages/crazyflie_sim/crazyflie_hil.py", line 469, in uploadTrajectory
+    [crazyflie_server-4]     upload_result = trajectory_mem.write_data_sync()
+    [crazyflie_server-4]   File "/home/christian/.local/lib/python3.10/site-packages/cflib/crazyflie/mem/trajectory_memory.py", line 214, in write_data_sync
+    [crazyflie_server-4]     self.write_data(syncer.success_cb, write_failed_cb=syncer.failure_cb, start_addr=start_addr)
+    [crazyflie_server-4]   File "/home/christian/.local/lib/python3.10/site-packages/cflib/crazyflie/mem/trajectory_memory.py", line 200, in write_data
+    [crazyflie_server-4]     data += element.pack()
+    [crazyflie_server-4]   File "/home/christian/.local/lib/python3.10/site-packages/cflib/crazyflie/mem/trajectory_memory.py", line 47, in pack
+    [crazyflie_server-4]     data += struct.pack('<ffffffff', *self.x.values)
+
+    1. Solution:    add an option to uav_trajectory.py and crazyflie_server.py to 
+                    pass the data directly to the hil_cf and convert the raw (csv)
+                    to Poly4D objects using the "from cflib.crazyflie.mem import Poly4D" 
+                    functions as discribed in 
+                    https://github.com/bitcraze/crazyflie-lib-python/blob/3e84ceefb3659da2d306c76db078eb9c2ef1f6ef/examples/mocap/mocap_hl_commander.py#L185
+                    instead of the custom implementation of Polynomial4D in uav_trajectory.py
+                    https://github.com/IMRCLab/crazyswarm2/blob/6019132dd117325437378d64f4a2e31d6e436c19/crazyflie_py/crazyflie_py/uav_trajectory.py#L41
+
+    2. Solution:    some how convert the Polynomial4D object into the Poly4D object of "cflib.crazyflie.mem"
+                    and append them to the trajectory_mem.trajectory list
+    """
