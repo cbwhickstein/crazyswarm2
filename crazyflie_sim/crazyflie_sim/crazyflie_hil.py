@@ -58,10 +58,11 @@ def copy_svec(v):
     return firm.mkvec(v.x, v.y, v.z)    
 
 class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example (https://github.com/bitcraze/crazyflie-lib-python/blob/master/examples/parameters/basicparam.py) to also write the state
-    def __init__(self, link_uri="usb://0", state=None):
+    def __init__(self, link_uri="usb://0", state=None, sim_cf=None):
         """ Initialize and run the example with the specified link_uri """
 
         # Software state of the crazyflie
+        self.sim_cf = sim_cf
         self.cf_state = state
         self.estimator_init_done = False
 
@@ -176,6 +177,15 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.add_update_callback(group="hil", name="simRotRoll", cb=self._param_simRotRoll_callback)
         self._cf.param.add_update_callback(group="hil", name="simRotYaw", cb=self._param_simRotYaw_callback)
 
+        self._cf.param.add_update_callback(group="hil", name="simOmegaX", cb=self._param_simOmegaX_callback)
+        self._cf.param.add_update_callback(group="hil", name="simOmegaY", cb=self._param_simOmegaY_callback)
+        self._cf.param.add_update_callback(group="hil", name="simOmegaZ", cb=self._param_simOmegaZ_callback)
+
+        self._cf.param.add_update_callback(group="hil", name="simVelocityZ", cb=self._param_simVelocityZ_callback)
+
+        self._cf.param.add_update_callback(group="hil", name="simAccZ", cb=self._param_simAccZ_callback)
+
+
 
         self._cf.param.set_value('hil.simPosX', self.cf_state.position.x)
         self._cf.param.set_value('hil.simPosY', self.cf_state.position.y)
@@ -184,6 +194,15 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.set_value('hil.simRotPitch', self.cf_state.attitude.pitch)
         self._cf.param.set_value('hil.simRotRoll', self.cf_state.attitude.roll)
         self._cf.param.set_value('hil.simRotYaw', self.cf_state.attitude.yaw)
+
+        self._cf.param.set_value('hil.simOmegaX', self.sim_cf.setpoint.attitudeRate.roll)
+        self._cf.param.set_value('hil.simOmegaY', self.sim_cf.setpoint.attitudeRate.pitch)
+        self._cf.param.set_value('hil.simOmegaZ', self.sim_cf.setpoint.attitudeRate.yaw)
+
+        self._cf.param.set_value('hil.simVelocityZ', self.cf_state.velocity.z)
+
+        self._cf.param.set_value('hil.simAccZ', self.sim_cf.setpoint.acceleration.z)
+
 
 
         hwz = self._cf.param.get_value('hil.simPosZ')
@@ -266,6 +285,24 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
     def _param_simRotYaw_callback(self, name, value):
         #print('{0}: {1}'.format(name, value))
         self._cf.param.set_value('hil.simRotYaw', self.cf_state.attitude.yaw)
+
+    def _param_simOmegaX_callback(self, name, value):
+        self._cf.param.set_value('hil.simOmegaX', self.sim_cf.setpoint.attitudeRate.roll)
+
+    def _param_simOmegaY_callback(self, name, value):
+        self._cf.param.set_value('hil.simOmegaY', self.sim_cf.setpoint.attitudeRate.pitch)
+
+    def _param_simOmegaZ_callback(self, name, value):
+        self._cf.param.set_value('hil.simOmegaZ', self.sim_cf.setpoint.attitudeRate.yaw)
+
+    def _param_simVelocityZ_callback(self, name, value):
+        self._cf.param.set_value('hil.simVelocityZ', self.cf_state.velocity.z)
+    
+    def _param_simAccZ_callback(self, name, value):
+        self._cf.param.set_value('hil.simAccZ', self.sim_cf.setpoint.acceleration.z)
+    
+
+
 
     def _param_estimator_callback(self, name, value):
         print(value)
@@ -361,7 +398,7 @@ class CrazyflieHIL:
 
         # INIT HW CRAZYFLIE and USB connection
         cflib.crtp.init_drivers()
-        self.cf_hil_logger = CrazyflieHILLogger(state=self.state)
+        self.cf_hil_logger = CrazyflieHILLogger(state=self.state, sim_cf=self)
 
     def set_motor_pwm(self):
         for i in range(50000, 60000, 1):
