@@ -496,10 +496,10 @@ class CrazyflieHIL:
         total_duration = 0
         for row in pieces:
             duration = row.duration
-            x = row.poly_x
-            y = row.poly_y
-            z = row.poly_z
-            yaw = row.poly_yaw
+            x =  Poly4D.Poly(row.poly_x)
+            y =  Poly4D.Poly(row.poly_y)
+            z =  Poly4D.Poly(row.poly_z)
+            yaw =  Poly4D.Poly(row.poly_yaw)
             trajectory_mem.trajectory.append(Poly4D(duration, x, y, z, yaw))
             total_duration += duration
 
