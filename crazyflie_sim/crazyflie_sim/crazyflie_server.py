@@ -203,7 +203,7 @@ class CrazyflieServer(Node):
         self.timer = self.create_timer(max_dt, self._timer_callback)
         self.is_shutdown = False
 
-        start_periodic_save_data( self.cfs[ list(self.cfs.keys())[0] ] )
+        
 
     def on_shutdown_callback(self):
         if not self.is_shutdown:
@@ -249,6 +249,8 @@ class CrazyflieServer(Node):
 
     def _takeoff_callback(self, request, response, name='all'):
         """Service callback to takeoff the crazyflie."""
+        start_periodic_save_data( self.cfs[ list(self.cfs.keys())[0] ] )
+        
         duration = float(request.duration.sec) + \
             float(request.duration.nanosec / 1e9)
         self.get_logger().info(
