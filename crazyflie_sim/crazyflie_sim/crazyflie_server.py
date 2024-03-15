@@ -26,7 +26,40 @@ from .crazyflie_sil import CrazyflieSIL, TrajectoryPolynomialPiece
 from .sim_data_types import State
 from .crazyflie_hil import CrazyflieHIL
 
+import time
+import threading
+import csv
+import datetime
+import os
 
+file_name = str(datetime.datetime.now()).split(' ')[0] + str(datetime.datetime.now()).split(' ')[1].split('.')[0]
+data_period = 0.1
+file_created = False
+
+def save_data(cf):
+    global file_created
+    if not file_created:
+        with open(file_name, 'w', newline='\n') as file:
+            writer = csv.writer(file)
+            writer.writerows([["rotRoll", "rotPitch", 'rotYaw', 'pwmM1', 'pwmM2', 'pwmM3', 'pwmM4', 'velX', 'velY', 'velZ', 'omegaRoll', 'omegaPitch', 'omegaYaw']])
+        file_created = True
+
+    rotation_data = [cf.state.attitude.roll, cf.state.attitude.pitch, cf.state.attitude.yaw]
+    pwm_data = [cf.motors_thrust_pwm.motors.m1, cf.motors_thrust_pwm.motors.m2, cf.motors_thrust_pwm.motors.m3, cf.motors_thrust_pwm.motors.m4]
+    velocity_data = [cf.state.velocity.x, cf.state.velocity.y, cf.state.velocity.z]
+    angular_velocity_data = [cf.setpoint.attitudeRate.roll, cf.setpoint.attitudeRate.pitch, cf.setpoint.attitudeRate.yaw]
+
+    data = rotation_data + pwm_data + velocity_data + angular_velocity_data
+
+    with open(file_name, 'a', newline='\n') as file:
+        writer = csv.writer(file)
+        writer.writerows([data])
+
+    
+
+def start_periodic_save_data(cf):
+    save_data(cf)
+    threading.Timer(data_period, start_periodic_save_data, args=(cf,)).start()
 
 class CrazyflieServer(Node):
 
@@ -169,6 +202,8 @@ class CrazyflieServer(Node):
             else self._ros_parameters['sim']['max_dt']
         self.timer = self.create_timer(max_dt, self._timer_callback)
         self.is_shutdown = False
+
+        start_periodic_save_data( self.cfs[ list(self.cfs.keys())[0] ] )
 
     def on_shutdown_callback(self):
         if not self.is_shutdown:
