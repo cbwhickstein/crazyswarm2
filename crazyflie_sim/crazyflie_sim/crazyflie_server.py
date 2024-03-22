@@ -33,7 +33,7 @@ import datetime
 import os
 
 file_name = str(datetime.datetime.now()).split(' ')[0] + str(datetime.datetime.now()).split(' ')[1].split('.')[0]
-data_period = 0.1
+data_period = 0.01
 file_created = False
 
 def save_data(cf):
@@ -47,7 +47,7 @@ def save_data(cf):
     rotation_data = [cf.state.attitude.roll, cf.state.attitude.pitch, cf.state.attitude.yaw]
     pwm_data = [cf.motors_thrust_pwm.motors.m1, cf.motors_thrust_pwm.motors.m2, cf.motors_thrust_pwm.motors.m3, cf.motors_thrust_pwm.motors.m4]
     velocity_data = [cf.state.velocity.x, cf.state.velocity.y, cf.state.velocity.z]
-    angular_velocity_data = [cf.setpoint.attitudeRate.roll, cf.setpoint.attitudeRate.pitch, cf.setpoint.attitudeRate.yaw]
+    angular_velocity_data = [cf.sensors.gyro.x, cf.sensors.gyro.y, cf.sensors.gyro.z]
 
     data = rotation_data + pwm_data + velocity_data + angular_velocity_data
 

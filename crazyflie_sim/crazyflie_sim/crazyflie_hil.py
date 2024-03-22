@@ -181,6 +181,8 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.add_update_callback(group="hil", name="simOmegaY", cb=self._param_simOmegaY_callback)
         self._cf.param.add_update_callback(group="hil", name="simOmegaZ", cb=self._param_simOmegaZ_callback)
 
+        self._cf.param.add_update_callback(group="hil", name="simVelocityX", cb=self._param_simVelocityX_callback)
+        self._cf.param.add_update_callback(group="hil", name="simVelocityY", cb=self._param_simVelocityY_callback)
         self._cf.param.add_update_callback(group="hil", name="simVelocityZ", cb=self._param_simVelocityZ_callback)
 
         self._cf.param.add_update_callback(group="hil", name="simAccZ", cb=self._param_simAccZ_callback)
@@ -195,10 +197,12 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.set_value('hil.simRotRoll', self.cf_state.attitude.roll)
         self._cf.param.set_value('hil.simRotYaw', self.cf_state.attitude.yaw)
 
-        self._cf.param.set_value('hil.simOmegaX', self.sim_cf.setpoint.attitudeRate.roll)
-        self._cf.param.set_value('hil.simOmegaY', self.sim_cf.setpoint.attitudeRate.pitch)
-        self._cf.param.set_value('hil.simOmegaZ', self.sim_cf.setpoint.attitudeRate.yaw)
+        self._cf.param.set_value('hil.simOmegaX', self.sim_cf.sensors.gyro.x)
+        self._cf.param.set_value('hil.simOmegaY', self.sim_cf.sensors.gyro.y)
+        self._cf.param.set_value('hil.simOmegaZ', self.sim_cf.sensors.gyro.z)
 
+        self._cf.param.set_value('hil.simVelocityX', self.cf_state.velocity.x)
+        self._cf.param.set_value('hil.simVelocityY', self.cf_state.velocity.y)
         self._cf.param.set_value('hil.simVelocityZ', self.cf_state.velocity.z)
 
         self._cf.param.set_value('hil.simAccZ', self.sim_cf.setpoint.acceleration.z)
@@ -295,6 +299,12 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
     def _param_simOmegaZ_callback(self, name, value):
         self._cf.param.set_value('hil.simOmegaZ', self.sim_cf.setpoint.attitudeRate.yaw)
 
+    def _param_simVelocityX_callback(self, name, value):
+        self._cf.param.set_value('hil.simVelocityX', self.cf_state.velocity.x)
+    
+    def _param_simVelocityY_callback(self, name, value):
+        self._cf.param.set_value('hil.simVelocityY', self.cf_state.velocity.y)
+    
     def _param_simVelocityZ_callback(self, name, value):
         self._cf.param.set_value('hil.simVelocityZ', self.cf_state.velocity.z)
     
@@ -550,6 +560,9 @@ class CrazyflieHIL:
         
 
     def _goTo_thread(self, goal, yaw, duration, relative=False, groupMask=0):
+        if (type(goal) == type([])):
+            return
+        print(goal[2])
         self.cf_hil_logger._cf.high_level_commander.go_to(goal[0], goal[1], goal[2], yaw, duration, relative)
         while (self.state.position.x != goal[0] and self.state.position.y != goal[1] and self.state.position.z != goal[2]):
             data = self._get_motor_data()
