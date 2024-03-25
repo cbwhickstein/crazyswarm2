@@ -186,6 +186,11 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.add_update_callback(group="hil", name="simVelocityZ", cb=self._param_simVelocityZ_callback)
 
         self._cf.param.add_update_callback(group="hil", name="simAccZ", cb=self._param_simAccZ_callback)
+        
+        self._cf.param.add_update_callback(group="hil", name="quatW", cb=self._param_quatW_callback)
+        self._cf.param.add_update_callback(group="hil", name="quatX", cb=self._param_quatX_callback)
+        self._cf.param.add_update_callback(group="hil", name="quatY", cb=self._param_quatY_callback)
+        self._cf.param.add_update_callback(group="hil", name="quatZ", cb=self._param_quatZ_callback)
 
 
 
@@ -205,8 +210,12 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
         self._cf.param.set_value('hil.simVelocityY', self.cf_state.velocity.y)
         self._cf.param.set_value('hil.simVelocityZ', self.cf_state.velocity.z)
 
-        self._cf.param.set_value('hil.simAccZ', self.sim_cf.setpoint.acceleration.z)
+        self._cf.param.set_value('hil.simAccZ', self.sim_cf.setpoint.acceleration.z) #still uses setpoint :(
 
+        self._cf.param.set_value('hil.quatW', self.sim_cf.state.attitudeQuaternion.w)
+        self._cf.param.set_value('hil.quatX', self.sim_cf.state.attitudeQuaternion.x)
+        self._cf.param.set_value('hil.quatY', self.sim_cf.state.attitudeQuaternion.y)
+        self._cf.param.set_value('hil.quatZ', self.sim_cf.state.attitudeQuaternion.z)
 
 
         hwz = self._cf.param.get_value('hil.simPosZ')
@@ -310,6 +319,18 @@ class CrazyflieHILLogger: # TODO: change to work like the basicparam.py example 
     
     def _param_simAccZ_callback(self, name, value):
         self._cf.param.set_value('hil.simAccZ', self.sim_cf.setpoint.acceleration.z)
+    
+    def _param_quatW_callback(self, name, value):
+        self._cf.param.set_value('hil.quatW', self.sim_cf.state.attitudeQuaternion.w)
+    
+    def _param_quatX_callback(self, name, value):
+        self._cf.param.set_value('hil.quatW', self.sim_cf.state.attitudeQuaternion.x)
+    
+    def _param_quatY_callback(self, name, value):
+        self._cf.param.set_value('hil.quatW', self.sim_cf.state.attitudeQuaternion.y)
+    
+    def _param_quatZ_callback(self, name, value):
+        self._cf.param.set_value('hil.quatW', self.sim_cf.state.attitudeQuaternion.z)
     
 
 
@@ -692,30 +713,3 @@ class CrazyflieHIL:
         return np.maximum(force_in_newton, 0)
 
     
-
-    """
-    When uploading a trajectory to the simulator it crashes with the following error message.
-    Below the error messages are 2 solution methods but it was to late to test them.
-
-    [crazyflie_server-4]   File "/home/christian/Schreibtisch/Studium/Bachelorarbeit/Simulators/ros2_ws/install/crazyflie_sim/local/lib/python3.10/dist-packages/crazyflie_sim/crazyflie_server.py", line 292, in _upload_trajectory_callback
-    [crazyflie_server-4]     cf.uploadTrajectory(request.trajectory_id, request.piece_offset, pieces)
-    [crazyflie_server-4]   File "/home/christian/Schreibtisch/Studium/Bachelorarbeit/Simulators/ros2_ws/install/crazyflie_sim/local/lib/python3.10/dist-packages/crazyflie_sim/crazyflie_hil.py", line 469, in uploadTrajectory
-    [crazyflie_server-4]     upload_result = trajectory_mem.write_data_sync()
-    [crazyflie_server-4]   File "/home/christian/.local/lib/python3.10/site-packages/cflib/crazyflie/mem/trajectory_memory.py", line 214, in write_data_sync
-    [crazyflie_server-4]     self.write_data(syncer.success_cb, write_failed_cb=syncer.failure_cb, start_addr=start_addr)
-    [crazyflie_server-4]   File "/home/christian/.local/lib/python3.10/site-packages/cflib/crazyflie/mem/trajectory_memory.py", line 200, in write_data
-    [crazyflie_server-4]     data += element.pack()
-    [crazyflie_server-4]   File "/home/christian/.local/lib/python3.10/site-packages/cflib/crazyflie/mem/trajectory_memory.py", line 47, in pack
-    [crazyflie_server-4]     data += struct.pack('<ffffffff', *self.x.values)
-
-    1. Solution:    add an option to uav_trajectory.py and crazyflie_server.py to 
-                    pass the data directly to the hil_cf and convert the raw (csv)
-                    to Poly4D objects using the "from cflib.crazyflie.mem import Poly4D" 
-                    functions as discribed in 
-                    https://github.com/bitcraze/crazyflie-lib-python/blob/3e84ceefb3659da2d306c76db078eb9c2ef1f6ef/examples/mocap/mocap_hl_commander.py#L185
-                    instead of the custom implementation of Polynomial4D in uav_trajectory.py
-                    https://github.com/IMRCLab/crazyswarm2/blob/6019132dd117325437378d64f4a2e31d6e436c19/crazyflie_py/crazyflie_py/uav_trajectory.py#L41
-
-    2. Solution:    some how convert the Polynomial4D object into the Poly4D object of "cflib.crazyflie.mem"
-                    and append them to the trajectory_mem.trajectory list
-    """
